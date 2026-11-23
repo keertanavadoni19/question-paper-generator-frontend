@@ -13,6 +13,7 @@ const BANK_SUBJECTS = ["physics", "chemistry", "mathematics", "botany", "zoology
 const EMPTY = {
   subjectId: "physics",
   chapter: "",
+  concept: "",
   type: "mcq",
   difficulty: "medium",
   text: "",
@@ -47,7 +48,9 @@ export default function QuestionForm({ initial, onSubmit, onCancel, submitLabel 
   const [saving, setSaving] = useState(false);
 
   const subjects = subjectOptions ?? BANK_SUBJECTS;
-  const chapters = useMemo(() => chaptersFor(q.subjectId).map((c) => c.name), [q.subjectId]);
+  const chapterList = useMemo(() => chaptersFor(q.subjectId), [q.subjectId]);
+  const chapters = chapterList.map((c) => c.name);
+  const concepts = chapterList.find((c) => c.name === q.chapter)?.concepts ?? [];
 
   const set = (field, value) => setQ((prev) => ({ ...prev, [field]: value }));
 
@@ -65,6 +68,7 @@ export default function QuestionForm({ initial, onSubmit, onCancel, submitLabel 
         text: q.text.trim(),
         options: q.type === "mcq" ? q.options.map((o) => String(o).trim()) : [],
         answer: q.type === "mcq" ? Number(q.answer) : String(q.answer).trim(),
+        concept: q.concept || undefined,
         needsReview: false,
       });
     } finally {
@@ -80,10 +84,13 @@ export default function QuestionForm({ initial, onSubmit, onCancel, submitLabel 
           label="Subject"
           value={q.subjectId}
           disabled={lockSubject}
-          onChange={(e) => setQ((prev) => ({ ...prev, subjectId: e.target.value, chapter: "" }))}
+          onChange={(e) => setQ((prev) => ({ ...prev, subjectId: e.target.value, chapter: "", concept: "" }))}
           options={subjects.map((id) => ({ value: id, label: SUBJECTS[id].name }))}
         />
-        <Select id="qf-chapter" label="Chapter" value={q.chapter} placeholder="Select chapter" onChange={(e) => set("chapter", e.target.value)} options={chapters} error={errors.chapter} />
+        <Select id="qf-chapter" label="Chapter" value={q.chapter} placeholder="Select chapter" onChange={(e) => setQ((prev) => ({ ...prev, chapter: e.target.value, concept: "" }))} options={chapters} error={errors.chapter} />
+        {concepts.length > 0 && (
+          <Select id="qf-concept" label="Concept (optional)" value={q.concept ?? ""} placeholder="Not tagged" onChange={(e) => set("concept", e.target.value)} options={concepts} className="sm:col-span-2" />
+        )}
         <Select id="qf-type" label="Question type" value={q.type} onChange={(e) => changeType(e.target.value)} options={[{ value: "mcq", label: "MCQ (single correct)" }, { value: "numerical", label: "Numerical value" }]} />
         <Select id="qf-difficulty" label="Difficulty" value={q.difficulty} onChange={(e) => set("difficulty", e.target.value)} options={[{ value: "easy", label: "Easy" }, { value: "medium", label: "Medium" }, { value: "hard", label: "Hard" }]} />
       </div>

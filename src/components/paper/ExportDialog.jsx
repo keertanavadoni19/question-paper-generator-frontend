@@ -3,15 +3,18 @@ import { FileDown, FileText, Printer } from "lucide-react";
 import Modal from "../ui/Modal";
 import Button from "../ui/Button";
 import Toggle from "../ui/Toggle";
-import { exportPdf, exportWord } from "../../services/exportService";
+import { exportPdf, exportWord, printPaper } from "../../services/exportService";
 
 const FORMATS = [
-  { value: "pdf", label: "PDF", hint: "Opens print dialog → Save as PDF", icon: Printer },
-  { value: "word", label: "Word (.doc)", hint: "Editable in MS Word / Google Docs", icon: FileText },
+  { value: "pdf", label: "PDF", hint: "Print dialog → “Save as PDF”", icon: FileDown },
+  { value: "word", label: "Word (.docx)", hint: "Editable in MS Word / Google Docs", icon: FileText },
+  { value: "print", label: "Print", hint: "Send straight to a printer", icon: Printer },
 ];
 
-export default function ExportDialog({ open, onClose, paper, initialSet = "A", onExported }) {
-  const [format, setFormat] = useState("pdf");
+// Exports use the paper's layout (fonts, numbering, page setup, header/footer) — the same as the preview.
+export default function ExportDialog({ open, onClose, paper, initialSet = "A", initialFormat = "pdf", onExported }) {
+  const [format, setFormat] = useState(initialFormat);
+  const [busy, setBusy] = useState(false);
   const [content, setContent] = useState("paper");
   const [sets, setSets] = useState([initialSet]);
   const [includeAnswerKey, setIncludeAnswerKey] = useState(false);
@@ -21,12 +24,20 @@ export default function ExportDialog({ open, onClose, paper, initialSet = "A", o
   const toggleSet = (label) =>
     setSets((prev) => (prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label].sort()));
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const options = { sets, includeAnswerKey, includeSolutions, answerKeyOnly: content === "key" };
-    if (format === "pdf") exportPdf(paper, options);
-    else exportWord(paper, options);
-    onExported?.(format);
-    onClose();
+    setBusy(true);
+    try {
+      if (format === "word") await exportWord(paper, options);
+      else if (format === "print") await printPaper(paper, options);
+      else await exportPdf(paper, options);
+      onExported?.(format);
+      onClose();
+    } catch (err) {
+      onExported?.(format, err);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -39,7 +50,7 @@ export default function ExportDialog({ open, onClose, paper, initialSet = "A", o
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button icon={FileDown} onClick={handleExport} disabled={!sets.length}>
+          <Button icon={format === "print" ? Printer : FileDown} onClick={handleExport} disabled={!sets.length} loading={busy} loadingText="Preparing…">
             Export {sets.length > 1 ? `${sets.length} sets` : `Set ${sets[0] ?? ""}`}
           </Button>
         </>
@@ -48,7 +59,7 @@ export default function ExportDialog({ open, onClose, paper, initialSet = "A", o
       <div className="space-y-5">
         <div>
           <p className="mb-2 text-sm font-medium text-slate-700">Format</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {FORMATS.map(({ value, label, hint, icon: Icon }) => (
               <button
                 key={value}

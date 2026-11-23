@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft, Download, Pencil, Eye, Layers, Plus, CircleCheck, TriangleAlert, Shuffle, Clock, Award, ListChecks, Database, Search, Cloud, LoaderCircle,
+  ArrowUp, ArrowDown, Copy, RefreshCw, SlidersHorizontal, Trash2, X,
 } from "lucide-react";
 
 import Button from "../components/ui/Button";
@@ -13,12 +14,20 @@ import Modal from "../components/ui/Modal";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import Loader from "../components/ui/Loader";
 import EmptyState from "../components/ui/EmptyState";
-import QuestionView from "../components/paper/QuestionView";
 import QuestionForm from "../components/paper/QuestionForm";
 import ExportDialog from "../components/paper/ExportDialog";
+import DocumentPreview from "../components/paper/DocumentPreview";
+import EditorToolbar from "../components/paper/EditorToolbar";
+import InlineQuestionEditor from "../components/paper/InlineQuestionEditor";
+import SectionSettingsDialog from "../components/paper/SectionSettingsDialog";
+import FindReplaceDialog from "../components/paper/FindReplaceDialog";
+import BlockDialog, { newBlock } from "../components/paper/BlockDialog";
 import { useToast } from "../context/ToastContext";
-import { buildSets, getPaper, getSetView, paperTotals, regenerateQuestion, savePaper } from "../services/paperService";
+import {
+  buildSets, duplicateQuestion, getPaper, getSetView, moveQuestion, numberingOf, paperTotals, regenerateQuestion, removeQuestion, savePaper, stepQuestion, updateQuestion,
+} from "../services/paperService";
 import { defaultInstructions } from "../services/exportService";
+import { getLayout, pageMetrics, MM_TO_PX } from "../services/paperLayout";
 import { getQuestionsSync } from "../services/questionService";
 import { SET_LABELS, SUBJECT_SOURCES, getExam } from "../data/exams";
 import { formatDate, optionLetter, uid } from "../utils/helpers";
@@ -116,6 +125,32 @@ function SetsDialog({ open, onClose, paper, onApply }) {
   );
 }
 
+// ── Instructions dialog ────────────────────────────────────────
+function InstructionsDialog({ paper, onSave, onClose }) {
+  const [text, setText] = useState(paper.instructions?.trim() ? paper.instructions : defaultInstructions(paper).join("\n"));
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      title="Instructions"
+      description="One instruction per line. They are shown in the box below the paper header."
+      footer={
+        <>
+          <Button variant="ghost" className="mr-auto" onClick={() => onSave("")}>Use standard instructions</Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => onSave(text.trim())}>Save</Button>
+        </>
+      }
+    >
+      <textarea autoFocus rows={9} value={text} onChange={(e) => setText(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100" />
+    </Modal>
+  );
+}
+
+const HISTORY_LIMIT = 60;
+const BLOCK_LABELS = { pageBreak: "Page break", hr: "Horizontal line", table: "Table", text: "Text", image: "Image" };
+
 export default function PaperPreview() {
   const { paperId } = useParams();
   const navigate = useNavigate();
@@ -133,27 +168,141 @@ export default function PaperPreview() {
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [addingTo, setAddingTo] = useState(null);
-  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState(null);
   const [setsOpen, setSetsOpen] = useState(false);
+  const [sectionsOpen, setSectionsOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [blockDialog, setBlockDialog] = useState(null); // { block, anchor, index }
+
+  const [tab, setTab] = useState("edit");
+  const [selection, setSelection] = useState(null); // { type: question|section|block, id }
+  const [inlineId, setInlineId] = useState(null);
+  const [zoomMode, setZoomMode] = useState("fit");
+  const [fitZoom, setFitZoom] = useState(1);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const paperRef = useRef(null);
+  const past = useRef([]);
+  const future = useRef([]);
+  const lastGroup = useRef({ key: null, at: 0 });
+  const saveTimer = useRef(null);
+  const [, setHistoryTick] = useState(0);
+  const viewport = useRef(null);
+  const shell = useRef(null);
 
   useEffect(() => {
-    getPaper(paperId).then(setPaper).catch((err) => setError(err.message));
+    getPaper(paperId).then((p) => { paperRef.current = p; setPaper(p); }).catch((err) => setError(err.message));
   }, [paperId]);
 
-  // Every change is saved immediately (auto-save).
-  const commit = useCallback(async (next, message) => {
-    setPaper(next);
+  // Saves shortly after the last change (several quick edits = one save).
+  const persist = useCallback((next) => {
     setSaving(true);
-    try {
-      const saved = await savePaper(next);
-      setPaper(saved);
-      if (message) toast.success(message);
-    } catch (err) {
-      toast.error(err.message || "Could not save changes");
-    } finally {
-      setSaving(false);
-    }
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const saved = await savePaper(next);
+        if (paperRef.current === next) {
+          paperRef.current = saved;
+          setPaper(saved);
+        }
+      } catch (err) {
+        toast.error(err.message || "Could not save changes");
+      } finally {
+        setSaving(false);
+      }
+    }, 450);
   }, [toast]);
+
+  useEffect(() => () => clearTimeout(saveTimer.current), []);
+
+  // Applies a change: updates the preview at once, records undo history and auto-saves.
+  // Changes with the same `group` within 1.5 s (typing, colour dragging) form one undo step.
+  const commit = useCallback((next, message, { group } = {}) => {
+    const prev = paperRef.current;
+    if (!prev || next === prev) return;
+    const now = Date.now();
+    const merge = group && lastGroup.current.key === group && now - lastGroup.current.at < 1500;
+    if (!merge) {
+      past.current = [...past.current.slice(-HISTORY_LIMIT + 1), prev];
+      future.current = [];
+    }
+    lastGroup.current = { key: group ?? null, at: now };
+    paperRef.current = next;
+    setPaper(next);
+    setHistoryTick((n) => n + 1);
+    persist(next);
+    if (message) toast.success(message);
+  }, [persist, toast]);
+
+  const restore = useCallback((from, to) => {
+    if (!from.current.length || !paperRef.current) return;
+    const target = from.current[from.current.length - 1];
+    from.current = from.current.slice(0, -1);
+    to.current = [...to.current, paperRef.current];
+    lastGroup.current = { key: null, at: 0 };
+    paperRef.current = target;
+    setPaper(target);
+    setInlineId(null);
+    setHistoryTick((n) => n + 1);
+    persist(target);
+  }, [persist]);
+  const undo = useCallback(() => restore(past, future), [restore]);
+  const redo = useCallback(() => restore(future, past), [restore]);
+
+  // Keyboard shortcuts (not while typing in a field)
+  useEffect(() => {
+    const onKey = (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      if (key === "h") { e.preventDefault(); setFindOpen(true); return; }
+      if (typing) return;
+      if (key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      if (key === "y" || (key === "z" && e.shiftKey)) { e.preventDefault(); redo(); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
+
+  // Fit-to-width zoom follows the preview's width
+  const layout = useMemo(() => (paper ? getLayout(paper) : null), [paper]);
+  const pageWidthPx = layout ? pageMetrics(layout).width * MM_TO_PX : 800;
+  const loaded = paper !== null;
+  useEffect(() => {
+    const el = viewport.current;
+    if (!el) return undefined;
+    const update = () => setFitZoom(Math.max(0.3, Math.min(1.5, (el.clientWidth - 32) / pageWidthPx)));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [pageWidthPx, loaded, fullscreen]);
+  const zoom = zoomMode === "fit" ? fitZoom : zoomMode;
+  const stepZoom = (d) => setZoomMode(Math.round(Math.max(0.3, Math.min(2, zoom + d)) * 10) / 10);
+
+  // Full screen: overlay, plus the browser's full-screen mode where available
+  const toggleFullscreen = () => {
+    if (fullscreen) {
+      if (document.fullscreenElement) document.exitFullscreen?.();
+      setFullscreen(false);
+    } else {
+      setFullscreen(true);
+      shell.current?.requestFullscreen?.().catch(() => {});
+    }
+  };
+  useEffect(() => {
+    const onChange = () => { if (!document.fullscreenElement) setFullscreen(false); };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  // Keep the selected block in view (e.g. after "Show" in find & replace)
+  useEffect(() => {
+    if (!selection) return;
+    requestAnimationFrame(() => document.querySelector(".qp-sel.is-selected")?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  }, [selection]);
 
   const view = useMemo(() => (paper ? getSetView(paper, setLabel) : []), [paper, setLabel]);
 
@@ -165,67 +314,152 @@ export default function PaperPreview() {
   const exam = getExam(paper.examId);
   const { questions: totalQ, marks } = paperTotals(paper);
   const drafts = paper.questions.filter((q) => q.needsReview).length;
-  const instructions = paper.instructions?.trim() ? paper.instructions.split("\n").filter(Boolean) : defaultInstructions(paper);
+  const allViewQuestions = view.flatMap((s) => s.questions);
+  const numberOf = (id) => allViewQuestions.find((q) => q.id === id)?.number;
+  const { scope } = numberingOf(paper);
 
   // ── mutations ──
-  const replaceQuestion = (id, data) => ({
-    ...paper,
-    questions: paper.questions.map((q) => (q.id === id ? { ...q, ...data, id, sectionId: q.sectionId, marks: q.marks, negative: q.negative } : q)),
-  });
+  const onLayout = (fn, group) => commit({ ...paperRef.current, layout: fn(getLayout(paperRef.current)) }, null, { group });
 
-  const handleEditSave = async (data) => {
-    await commit(replaceQuestion(editing.id, data), "Question updated");
+  const handleEditSave = (data) => {
+    commit(updateQuestion(paper, editing.id, data), "Question updated");
     setEditing(null);
   };
-
-  const handleDelete = async () => {
-    const id = deleting.id;
-    const next = {
-      ...paper,
-      questions: paper.questions.filter((q) => q.id !== id),
-      sets: paper.sets.map((s) => {
-        const { [id]: _removed, ...optionOrder } = s.optionOrder;
-        return { ...s, order: s.order.filter((qid) => qid !== id), optionOrder };
-      }),
-    };
-    setDeleting(null);
-    await commit(next, "Question removed");
+  const handleInlineSave = (data) => {
+    commit(updateQuestion(paper, inlineId, data), "Question updated");
+    setInlineId(null);
   };
-
+  const handleDelete = () => {
+    const id = deleting.id;
+    setDeleting(null);
+    if (selection?.id === id) setSelection(null);
+    commit(removeQuestion(paper, id), "Question removed from all sets");
+  };
   const handleRegenerate = async (q) => {
     setBusyId(q.id);
     try {
-      const fresh = await regenerateQuestion(paper, q.id);
-      await commit(replaceQuestion(q.id, fresh), "Question regenerated");
+      const fresh = await regenerateQuestion(paperRef.current, q.id);
+      const { id: _id, sectionId: _s, ...data } = fresh;
+      commit(updateQuestion(paperRef.current, q.id, data), "Question regenerated");
     } catch (err) {
       toast.error(err.message);
     } finally {
       setBusyId(null);
     }
   };
-
-  const handleAdd = async (data) => {
+  const handleAdd = (data) => {
     const id = uid("PQ");
-    const question = { ...data, id, sectionId: addingTo.subjectId, marks: exam.marking.correct, negative: exam.marking.incorrect };
+    const existing = paper.questions.find((q) => q.sectionId === addingTo.subjectId);
+    const question = { ...data, id, sectionId: addingTo.subjectId, marks: existing?.marks ?? exam.marking.correct, negative: existing?.negative ?? exam.marking.incorrect };
     const next = {
       ...paper,
       questions: [...paper.questions, question],
       sets: paper.sets.map((s) => ({ ...s, order: [...s.order, id], optionOrder: { ...s.optionOrder, [id]: question.options.map((_, i) => i) } })),
     };
     setAddingTo(null);
-    await commit(next, "Question added to all sets");
+    setSelection({ type: "question", id });
+    commit(next, "Question added to all sets");
   };
-
-  const handleRebuildSets = async (count, opts) => {
+  const handleRebuildSets = (count, opts) => {
     const next = { ...paper, config: { ...paper.config, ...opts, setCount: count }, sets: buildSets(paper, count, opts) };
     setSetsOpen(false);
     if (!next.sets.some((s) => s.label === setLabel)) setSetLabel("A");
-    await commit(next, `${count} set${count > 1 ? "s" : ""} ready`);
+    commit(next, `${count} set${count > 1 ? "s" : ""} ready`);
   };
-
   const toggleStatus = () => commit({ ...paper, status: paper.status === "final" ? "draft" : "final" }, paper.status === "final" ? "Moved back to draft" : "Marked as final");
 
-  const allViewQuestions = view.flatMap((s) => s.questions);
+  const moveSection = (index, step) => {
+    const sections = [...paper.sections];
+    const [moved] = sections.splice(index, 1);
+    sections.splice(index + step, 0, moved);
+    commit({ ...paper, sections }, null, {});
+  };
+  const applyMarks = (sectionId, plus, minus) =>
+    commit({ ...paper, questions: paper.questions.map((q) => (q.sectionId === sectionId ? { ...q, marks: plus, negative: minus } : q)) }, "Marks updated");
+
+  // Inserted blocks go after the selected question / section heading / block, else at the end.
+  const blocks = layout.blocks ?? [];
+  const insertPoint = () => {
+    if (selection?.type === "question") return { anchor: `q:${selection.id}`, index: blocks.length };
+    if (selection?.type === "section") return { anchor: `section:${selection.id}`, index: blocks.length };
+    if (selection?.type === "block") {
+      const i = blocks.findIndex((b) => b.id === selection.id);
+      if (i >= 0) return { anchor: blocks[i].after, index: i + 1 };
+    }
+    return { anchor: "end", index: blocks.length };
+  };
+  const insertTarget = selection?.type === "question" ? `after Q${numberOf(selection.id)}`
+    : selection?.type === "section" ? "at start of section"
+      : selection?.type === "block" ? "after selected item" : "at end of paper";
+  const addBlock = (data, { anchor, index }) => {
+    const block = { ...data, id: uid("blk"), after: anchor };
+    onLayout((l) => ({ ...l, blocks: [...l.blocks.slice(0, index), block, ...l.blocks.slice(index)] }));
+    setSelection({ type: "block", id: block.id });
+    if (!editMode) setEditMode(true);
+    toast.success(`${BLOCK_LABELS[data.type]} inserted ${insertTarget}`);
+  };
+  const onInsert = (type) => {
+    const point = insertPoint();
+    if (type === "pageBreak" || type === "hr") addBlock({ type }, point);
+    else setBlockDialog({ block: newBlock(type), ...point });
+  };
+  const saveBlock = (data) => {
+    if (blockDialog.block.id) onLayout((l) => ({ ...l, blocks: l.blocks.map((b) => (b.id === data.id ? data : b)) }));
+    else addBlock(data, blockDialog);
+    setBlockDialog(null);
+  };
+  const deleteBlock = (id) => {
+    onLayout((l) => ({ ...l, blocks: l.blocks.filter((b) => b.id !== id) }));
+    setSelection(null);
+  };
+
+  const activate = (sel) => {
+    setSelection(sel);
+    if (sel.type === "question") setInlineId(sel.id);
+    if (sel.type === "section") setSectionsOpen(true);
+    if (sel.type === "block") {
+      const b = blocks.find((x) => x.id === sel.id);
+      if (b && ["table", "text", "image"].includes(b.type)) setBlockDialog({ block: b });
+    }
+  };
+
+  const selectedQuestion = selection?.type === "question" ? paper.questions.find((q) => q.id === selection.id) : null;
+  const selectedSection = selection?.type === "section" ? paper.sections.find((s) => s.subjectId === selection.id) : null;
+  const selectedBlock = selection?.type === "block" ? blocks.find((b) => b.id === selection.id) : null;
+  const sectionIds = selectedQuestion ? view.find((s) => s.subjectId === selectedQuestion.sectionId)?.questions.map((q) => q.id) ?? [] : [];
+  const selectedIndex = selectedQuestion ? sectionIds.indexOf(selectedQuestion.id) : -1;
+
+  const selectionBar = editMode && (selectedQuestion || selectedSection || selectedBlock) && (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm">
+      {selectedQuestion && (
+        <>
+          <span className="mr-1 font-semibold text-indigo-900">Q{numberOf(selectedQuestion.id)} selected</span>
+          <Button size="sm" variant="secondary" icon={Pencil} onClick={() => setInlineId(selectedQuestion.id)}>Edit</Button>
+          <Button size="sm" variant="ghost" icon={ArrowUp} disabled={selectedIndex <= 0} onClick={() => commit(stepQuestion(paper, setLabel, selectedQuestion.id, -1))}>Up</Button>
+          <Button size="sm" variant="ghost" icon={ArrowDown} disabled={selectedIndex < 0 || selectedIndex >= sectionIds.length - 1} onClick={() => commit(stepQuestion(paper, setLabel, selectedQuestion.id, 1))}>Down</Button>
+          <Button size="sm" variant="ghost" icon={Copy} onClick={() => commit(duplicateQuestion(paper, selectedQuestion.id), "Question duplicated in all sets")}>Duplicate</Button>
+          <Button size="sm" variant="ghost" icon={RefreshCw} loading={busyId === selectedQuestion.id} loadingText="AI…" onClick={() => handleRegenerate(selectedQuestion)}>Regenerate</Button>
+          <Button size="sm" variant="ghost" icon={SlidersHorizontal} onClick={() => setEditing(selectedQuestion)}>Details</Button>
+          <Button size="sm" variant="ghost" icon={Trash2} className="text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => setDeleting(selectedQuestion)}>Delete</Button>
+        </>
+      )}
+      {selectedSection && (
+        <>
+          <span className="mr-1 font-semibold text-indigo-900">{selectedSection.name} section</span>
+          <Button size="sm" variant="secondary" icon={Layers} onClick={() => setSectionsOpen(true)}>Section settings</Button>
+          <Button size="sm" variant="ghost" icon={Plus} onClick={() => setAddingTo(selectedSection)}>Add question</Button>
+        </>
+      )}
+      {selectedBlock && (
+        <>
+          <span className="mr-1 font-semibold text-indigo-900">{BLOCK_LABELS[selectedBlock.type]} selected</span>
+          {["table", "text", "image"].includes(selectedBlock.type) && <Button size="sm" variant="secondary" icon={Pencil} onClick={() => setBlockDialog({ block: selectedBlock })}>Edit</Button>}
+          <Button size="sm" variant="ghost" icon={Trash2} className="text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => deleteBlock(selectedBlock.id)}>Remove</Button>
+        </>
+      )}
+      <button type="button" onClick={() => setSelection(null)} className="ml-auto rounded p-1 text-indigo-400 hover:bg-indigo-100 hover:text-indigo-700" aria-label="Clear selection"><X className="h-4 w-4" /></button>
+    </div>
+  );
 
   return (
     <>
@@ -245,6 +479,7 @@ export default function PaperPreview() {
             </div>
             {editMode ? (
               <input
+                key={paper.title}
                 defaultValue={paper.title}
                 onBlur={(e) => e.target.value.trim() && e.target.value !== paper.title && commit({ ...paper, title: e.target.value.trim() }, "Title updated")}
                 className="w-full rounded-lg border border-slate-300 px-2 py-1 text-2xl font-bold text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100"
@@ -262,12 +497,12 @@ export default function PaperPreview() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant={editMode ? "soft" : "secondary"} icon={editMode ? Eye : Pencil} onClick={() => setEditMode((m) => !m)}>
+            <Button variant={editMode ? "soft" : "secondary"} icon={editMode ? Eye : Pencil} onClick={() => { setEditMode((m) => !m); setInlineId(null); }}>
               {editMode ? "Done editing" : "Edit paper"}
             </Button>
             <Button variant="secondary" icon={Shuffle} onClick={() => setSetsOpen(true)}>Sets</Button>
             <Button variant="secondary" icon={CircleCheck} onClick={toggleStatus}>{paper.status === "final" ? "Mark draft" : "Mark final"}</Button>
-            <Button icon={Download} onClick={() => setExportOpen(true)}>Export</Button>
+            <Button icon={Download} onClick={() => setExportFormat("pdf")}>Export</Button>
           </div>
         </div>
       </div>
@@ -295,73 +530,83 @@ export default function PaperPreview() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-4">
-        {/* Paper sheet */}
-        <div className="min-w-0 xl:col-span-3">
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="paper-sheet border-b-2 border-slate-900 px-4 py-5 text-center sm:px-8">
-              {paper.institute && <p className="text-lg font-bold uppercase tracking-wide">{paper.institute}</p>}
-              <p className="text-base font-semibold">{paper.title}</p>
-              <p className="text-sm text-slate-600">{exam.fullName}</p>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-                <span>Time: <b>{paper.durationMinutes} min</b></span>
-                <span>Max. Marks: <b>{marks}</b></span>
-                <span className="rounded border-2 border-slate-900 px-3 py-0.5 font-bold">SET {setLabel}</span>
-              </div>
-            </div>
-
-            <div className="paper-sheet mx-4 mt-4 rounded-lg border border-slate-300 px-4 py-3 text-sm sm:mx-8">
-              <p className="mb-1 font-bold">Instructions</p>
-              <ol className="list-decimal space-y-0.5 pl-5 text-slate-700">
-                {instructions.map((line) => <li key={line}>{line}</li>)}
-              </ol>
-            </div>
-
-            <div className="sticky top-16 z-10 mt-4 flex gap-2 overflow-x-auto border-y border-slate-100 bg-white/95 px-4 py-2 backdrop-blur sm:px-8">
-              {view.map((section, i) => (
-                <a key={section.subjectId} href={`#section-${section.subjectId}`} className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-indigo-50 hover:text-indigo-700">
-                  Part {String.fromCharCode(65 + i)} · {section.name} ({section.questions.length})
-                </a>
-              ))}
-            </div>
-
-            <div className="px-2 pb-6 sm:px-4">
-              {view.map((section, i) => (
-                <section key={section.subjectId} id={`section-${section.subjectId}`} className="scroll-mt-32">
-                  <div className="mx-2 mb-2 mt-6 flex items-center justify-between rounded-lg bg-slate-100 px-4 py-2 sm:mx-4">
-                    <h2 className="paper-sheet font-bold uppercase">Part {String.fromCharCode(65 + i)} – {section.name}</h2>
-                    {editMode && <Button size="sm" variant="soft" icon={Plus} onClick={() => setAddingTo(section)}>Add question</Button>}
-                  </div>
-                  {section.questions.length ? (
-                    section.questions.map((q) => (
-                      <QuestionView
-                        key={q.id}
-                        question={q}
-                        showAnswers={showAnswers}
-                        showSolutions={showSolutions}
-                        editMode={editMode}
-                        busy={busyId === q.id}
-                        onEdit={() => setEditing(paper.questions.find((x) => x.id === q.id))}
-                        onRegenerate={handleRegenerate}
-                        onDelete={setDeleting}
-                      />
-                    ))
-                  ) : (
-                    <p className="px-6 py-4 text-sm text-slate-500">No questions in this section.</p>
-                  )}
-                </section>
-              ))}
-            </div>
+        {/* Editor + document */}
+        <div
+          ref={shell}
+          className={fullscreen ? "fixed inset-0 z-40 flex flex-col gap-3 overflow-hidden bg-slate-100 p-3" : "min-w-0 space-y-3 xl:col-span-3"}
+        >
+          <EditorToolbar
+            layout={layout}
+            onLayout={onLayout}
+            tab={tab}
+            onTab={setTab}
+            editMode={editMode}
+            onToggleEdit={() => { setEditMode((m) => !m); setInlineId(null); }}
+            onOpenSections={() => setSectionsOpen(true)}
+            onAddQuestion={setAddingTo}
+            sections={paper.sections}
+            canUndo={past.current.length > 0}
+            canRedo={future.current.length > 0}
+            onUndo={undo}
+            onRedo={redo}
+            onFind={() => setFindOpen(true)}
+            zoomLabel={`${Math.round(zoom * 100)}%`}
+            onZoomIn={() => stepZoom(0.1)}
+            onZoomOut={() => stepZoom(-0.1)}
+            onZoomFit={() => setZoomMode("fit")}
+            fullscreen={fullscreen}
+            onFullscreen={toggleFullscreen}
+            insertTarget={insertTarget}
+            onInsert={onInsert}
+            onEditInstructions={() => setInstructionsOpen(true)}
+            onExport={setExportFormat}
+          />
+          {selectionBar}
+          <div ref={viewport} className={`overflow-auto rounded-2xl border border-slate-200 bg-slate-100 px-4 py-6 ${fullscreen ? "min-h-0 flex-1" : "max-h-[calc(100vh-7rem)]"}`}>
+            <DocumentPreview
+              paper={paper}
+              setLabel={setLabel}
+              showAnswers={showAnswers}
+              showSolutions={showSolutions}
+              editMode={editMode}
+              zoom={zoom}
+              selection={selection}
+              onSelect={setSelection}
+              onActivate={activate}
+              onMove={(id, targetId, position) => commit(moveQuestion(paper, setLabel, id, targetId, position))}
+              editingId={editMode ? inlineId : null}
+              renderEditor={(qid) => {
+                const q = paper.questions.find((x) => x.id === qid);
+                return q && (
+                  <InlineQuestionEditor
+                    key={qid}
+                    question={q}
+                    number={numberOf(qid)}
+                    onSave={handleInlineSave}
+                    onCancel={() => setInlineId(null)}
+                    onMore={() => { setInlineId(null); setEditing(q); }}
+                  />
+                );
+              }}
+            />
           </div>
         </div>
 
         {/* Side panel: answer key + composition */}
         <div className="space-y-6 xl:sticky xl:top-24 xl:self-start">
           <Card title={`Answer key · Set ${setLabel}`} bodyClassName="p-4">
-            <div className="grid max-h-[340px] grid-cols-5 gap-1.5 overflow-y-auto text-center text-xs">
-              {allViewQuestions.map((q) => (
-                <div key={q.id} className={`rounded-md border py-1 ${q.needsReview ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}>
-                  <span className="block text-[10px] text-slate-400">{q.number}</span>
-                  <span className="font-bold text-slate-900">{q.type === "mcq" ? optionLetter(q.correctIndex) : q.answer}</span>
+            <div className="max-h-[340px] space-y-3 overflow-y-auto">
+              {(scope === "section" ? view : [{ subjectId: "all", name: "", questions: allViewQuestions }]).map((group) => (
+                <div key={group.subjectId}>
+                  {group.name && <p className="mb-1 text-xs font-semibold text-slate-500">{group.name}</p>}
+                  <div className="grid grid-cols-5 gap-1.5 text-center text-xs">
+                    {group.questions.map((q) => (
+                      <div key={q.id} className={`rounded-md border py-1 ${q.needsReview ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}>
+                        <span className="block text-[10px] text-slate-400">{q.number}</span>
+                        <span className="font-bold text-slate-900">{q.type === "mcq" ? optionLetter(q.correctIndex) : q.answer}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -402,7 +647,51 @@ export default function PaperPreview() {
 
       {setsOpen && <SetsDialog open onClose={() => setSetsOpen(false)} paper={paper} onApply={handleRebuildSets} />}
 
-      {exportOpen && <ExportDialog open onClose={() => setExportOpen(false)} paper={paper} initialSet={setLabel} onExported={(f) => toast.info(f === "pdf" ? "Print dialog opened — choose “Save as PDF”." : "Word file downloaded.")} />}
+      {sectionsOpen && (
+        <SectionSettingsDialog
+          paper={paper}
+          layout={layout}
+          onClose={() => setSectionsOpen(false)}
+          onLayout={onLayout}
+          onMoveSection={moveSection}
+          onApplyMarks={applyMarks}
+          onAddQuestion={(s) => { setSectionsOpen(false); setAddingTo(s); }}
+        />
+      )}
+
+      {findOpen && (
+        <FindReplaceDialog
+          paper={paper}
+          setLabel={setLabel}
+          onApply={(next, message) => commit(next, message)}
+          onClose={() => setFindOpen(false)}
+          onShow={(qid) => { setEditMode(true); setSelection({ type: "question", id: qid }); setFindOpen(false); }}
+        />
+      )}
+
+      {instructionsOpen && (
+        <InstructionsDialog
+          paper={paper}
+          onClose={() => setInstructionsOpen(false)}
+          onSave={(text) => { commit({ ...paper, instructions: text }, "Instructions updated"); setInstructionsOpen(false); }}
+        />
+      )}
+
+      {blockDialog && <BlockDialog block={blockDialog.block} onSave={saveBlock} onClose={() => setBlockDialog(null)} />}
+
+      {exportFormat && (
+        <ExportDialog
+          open
+          onClose={() => setExportFormat(null)}
+          paper={paper}
+          initialSet={setLabel}
+          initialFormat={exportFormat}
+          onExported={(f, err) => {
+            if (err) toast.error(err.message || "Export failed");
+            else toast.info(f === "word" ? "Word file downloaded." : f === "print" ? "Print dialog opened." : "Print dialog opened — choose “Save as PDF”.");
+          }}
+        />
+      )}
     </>
   );
 }

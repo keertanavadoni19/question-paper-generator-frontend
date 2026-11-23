@@ -1,0 +1,71 @@
+// Concepts inside each chapter (NCERT / JEE / NEET / KCET aligned).
+// Keyed by subject source → chapter name. `chaptersFor()` in syllabus.js attaches
+// these to every chapter as `chapter.concepts`, so the backend's
+// GET /syllabus/:examId should return the same field.
+// Question-bank and AI questions carry a `concept` that must match one of these names.
+
+export const CONCEPTS = {
+  physics: {
+    "Units and Measurements": ["SI Units and Fundamental Quantities", "Significant Figures", "Errors in Measurement", "Dimensional Analysis", "Applications of Dimensions", "Vernier Calipers and Screw Gauge"],
+    Kinematics: ["Motion in a Straight Line", "Equations of Uniformly Accelerated Motion", "Motion Under Gravity", "Graphs of Motion", "Vectors and Relative Velocity", "Projectile Motion", "Uniform Circular Motion"],
+    "Laws of Motion": ["Newton's First Law", "Newton's Second Law", "Newton's Third Law", "Law of Conservation of Momentum", "Impulse", "Free Body Diagrams", "Friction", "Applications of Newton's Laws"],
+    "Work, Energy and Power": ["Work Done by a Force", "Kinetic Energy and Work-Energy Theorem", "Potential Energy", "Conservation of Mechanical Energy", "Power", "Collisions"],
+    "Rotational Motion": ["Centre of Mass", "Torque and Angular Momentum", "Moment of Inertia", "Parallel and Perpendicular Axis Theorems", "Rolling Motion", "Conservation of Angular Momentum", "Rotational Kinetic Energy"],
+    Gravitation: ["Newton's Law of Gravitation", "Acceleration due to Gravity and its Variation", "Gravitational Potential Energy", "Escape Velocity", "Orbital Velocity and Satellites", "Kepler's Laws"],
+    "Properties of Solids and Liquids": ["Elasticity and Hooke's Law", "Young's, Bulk and Shear Modulus", "Pressure and Pascal's Law", "Bernoulli's Principle", "Viscosity and Stokes' Law", "Surface Tension", "Thermal Expansion and Calorimetry", "Heat Transfer"],
+    Thermodynamics: ["Zeroth Law and Temperature", "First Law of Thermodynamics", "Thermodynamic Processes", "Specific Heat Capacities", "Second Law of Thermodynamics", "Carnot Engine and Efficiency", "Refrigerators and Heat Pumps"],
+    "Kinetic Theory of Gases": ["Ideal Gas Equation", "Kinetic Interpretation of Pressure", "Kinetic Interpretation of Temperature", "RMS Speed of Molecules", "Degrees of Freedom and Equipartition", "Mean Free Path"],
+    "Oscillations and Waves": ["Simple Harmonic Motion", "Energy in SHM", "Simple Pendulum", "Spring-Mass System", "Wave Motion and Wave Speed", "Superposition and Standing Waves", "Beats", "Doppler Effect"],
+    Electrostatics: ["Coulomb's Law", "Electric Field and Field Lines", "Gauss's Law", "Electric Potential", "Electric Dipole", "Capacitors and Capacitance", "Combination of Capacitors", "Energy Stored in a Capacitor"],
+    "Current Electricity": ["Ohm's Law and Resistivity", "Drift Velocity", "Combination of Resistors", "Kirchhoff's Laws", "Wheatstone Bridge and Metre Bridge", "Potentiometer", "Cells, EMF and Internal Resistance", "Electrical Power and Heating"],
+    "Magnetic Effects of Current and Magnetism": ["Biot-Savart Law", "Ampere's Circuital Law", "Force on a Moving Charge", "Force Between Parallel Currents", "Torque on a Current Loop", "Moving Coil Galvanometer", "Bar Magnet and Earth's Magnetism", "Magnetic Materials"],
+    "Electromagnetic Induction and AC": ["Faraday's Laws", "Lenz's Law", "Motional EMF", "Self and Mutual Inductance", "AC Voltage and RMS Values", "LCR Circuits and Resonance", "Power in AC Circuits", "Transformers"],
+    "Electromagnetic Waves": ["Displacement Current", "Characteristics of EM Waves", "Electromagnetic Spectrum", "Uses of EM Waves"],
+    Optics: ["Reflection and Spherical Mirrors", "Refraction and Snell's Law", "Total Internal Reflection", "Lenses and Lens Maker's Formula", "Power of a Lens", "Prism and Dispersion", "Optical Instruments", "Huygens' Principle", "Interference and Young's Double Slit", "Diffraction and Polarisation"],
+    "Dual Nature of Matter and Radiation": ["Photoelectric Effect", "Einstein's Photoelectric Equation", "Photon Energy and Momentum", "de Broglie Wavelength", "Davisson-Germer Experiment"],
+    "Atoms and Nuclei": ["Rutherford's Model", "Bohr's Model of Hydrogen", "Hydrogen Spectrum", "Nuclear Size and Composition", "Mass Defect and Binding Energy", "Radioactive Decay", "Nuclear Fission and Fusion"],
+    "Semiconductor Electronics": ["Intrinsic and Extrinsic Semiconductors", "p-n Junction Diode", "Rectifiers", "Zener Diode", "LED, Photodiode and Solar Cell", "Logic Gates"],
+  },
+  chemistry: {
+    "Some Basic Concepts of Chemistry": ["Mole Concept", "Molar Mass", "Percentage Composition", "Empirical and Molecular Formula", "Stoichiometry", "Limiting Reagent", "Concentration Terms"],
+    "Atomic Structure": ["Subatomic Particles", "Bohr's Model", "Dual Nature of Electron", "Heisenberg's Uncertainty Principle", "Quantum Numbers", "Shapes of Orbitals and Nodes", "Electronic Configuration"],
+    "Chemical Bonding and Molecular Structure": ["Ionic Bond", "Covalent Bond and Lewis Structures", "VSEPR Theory", "Valence Bond Theory", "Hybridisation", "Molecular Orbital Theory", "Hydrogen Bonding", "Dipole Moment"],
+    "Chemical Thermodynamics": ["System and Surroundings", "First Law and Internal Energy", "Enthalpy", "Hess's Law", "Enthalpies of Reactions", "Entropy", "Gibbs Energy and Spontaneity"],
+    Equilibrium: ["Law of Mass Action", "Kp and Kc", "Le Chatelier's Principle", "Acids and Bases", "Ionisation of Water and pH", "Buffer Solutions", "Solubility Product", "Hydrolysis of Salts"],
+    "Redox Reactions": ["Oxidation Number", "Balancing Redox Reactions", "Types of Redox Reactions", "Redox Titrations"],
+    "Organic Chemistry – Basic Principles": ["IUPAC Nomenclature", "Isomerism", "Inductive Effect", "Resonance and Hyperconjugation", "Reaction Intermediates", "Types of Organic Reactions", "Purification and Analysis"],
+    Hydrocarbons: ["Alkanes", "Conformations", "Alkenes", "Markovnikov's Rule", "Alkynes", "Aromaticity", "Electrophilic Substitution in Benzene"],
+    Solutions: ["Concentration of Solutions", "Henry's Law", "Raoult's Law", "Ideal and Non-ideal Solutions", "Colligative Properties", "Van't Hoff Factor"],
+    Electrochemistry: ["Galvanic Cells", "Electrode Potential", "Nernst Equation", "Gibbs Energy and EMF", "Conductance and Kohlrausch's Law", "Electrolysis and Faraday's Laws", "Batteries and Corrosion"],
+    "Chemical Kinetics": ["Rate of Reaction", "Rate Law and Order", "Molecularity", "Zero Order Reactions", "First Order Reactions and Half-life", "Temperature Dependence and Arrhenius Equation", "Collision Theory"],
+    "p-Block Elements": ["Group 15 Elements", "Group 16 Elements", "Group 17 Elements (Halogens)", "Group 18 Elements (Noble Gases)", "Oxoacids", "Interhalogen Compounds"],
+    "d- and f-Block Elements": ["Electronic Configuration of Transition Elements", "Oxidation States", "Magnetic Properties", "Coloured Ions and Catalytic Properties", "KMnO₄ and K₂Cr₂O₇", "Lanthanoid Contraction", "Actinoids"],
+    "Coordination Compounds": ["Werner's Theory", "IUPAC Nomenclature of Complexes", "Oxidation State and Coordination Number", "Isomerism in Complexes", "Valence Bond Theory of Complexes", "Crystal Field Theory", "Applications of Complexes"],
+    "Haloalkanes and Haloarenes": ["Nomenclature and Classification", "Preparation of Haloalkanes", "SN1 Mechanism", "SN2 Mechanism", "Elimination Reactions", "Reactions of Haloarenes", "Polyhalogen Compounds"],
+    "Alcohols, Phenols and Ethers": ["Preparation of Alcohols", "Acidity of Alcohols and Phenols", "Reactions of Alcohols", "Reactions of Phenols", "Ethers", "Kolbe and Reimer-Tiemann Reactions"],
+    "Aldehydes, Ketones and Carboxylic Acids": ["Preparation of Carbonyl Compounds", "Nucleophilic Addition", "Aldol Condensation", "Cannizzaro Reaction", "Iodoform and Oxidation Tests", "Acidity of Carboxylic Acids", "Reactions of Carboxylic Acids"],
+    Amines: ["Classification and Nomenclature", "Preparation of Amines", "Basicity of Amines", "Reactions of Amines", "Diazonium Salts", "Hinsberg Test"],
+    Biomolecules: ["Carbohydrates", "Reducing and Non-reducing Sugars", "Proteins and Amino Acids", "Enzymes", "Vitamins", "Nucleic Acids"],
+  },
+  mathematics: {
+    "Sets, Relations and Functions": ["Sets and Subsets", "Operations on Sets and Venn Diagrams", "Relations", "Types of Functions", "Domain and Range", "Composition and Inverse of Functions"],
+    "Complex Numbers": ["Algebra of Complex Numbers", "Powers of i", "Modulus and Argument", "Polar Form", "Cube Roots of Unity", "Quadratic Equations"],
+    Trigonometry: ["Trigonometric Ratios and Identities", "Compound Angles", "Multiple and Sub-multiple Angles", "Trigonometric Equations", "Inverse Trigonometric Functions", "Heights and Distances"],
+    "Permutations and Combinations": ["Fundamental Principle of Counting", "Permutations", "Permutations with Repetition", "Combinations", "Circular Permutations", "Distribution and Selection Problems"],
+    "Binomial Theorem": ["Binomial Expansion", "General Term", "Middle Term", "Properties of Binomial Coefficients", "Greatest Term"],
+    "Sequences and Series": ["Arithmetic Progression", "Geometric Progression", "AM-GM Inequality", "Sum of Special Series", "Arithmetico-Geometric Series"],
+    "Straight Lines and Conic Sections": ["Distance and Section Formula", "Slope and Forms of a Line", "Distance of a Point from a Line", "Circles", "Parabola", "Ellipse", "Hyperbola"],
+    "Limits and Derivatives": ["Limits of Algebraic Functions", "Standard Trigonometric Limits", "Exponential and Logarithmic Limits", "Derivatives from First Principles", "Rules of Differentiation"],
+    Statistics: ["Measures of Central Tendency", "Mean Deviation", "Variance and Standard Deviation", "Coefficient of Variation"],
+    "Matrices and Determinants": ["Types of Matrices", "Matrix Operations", "Determinants and their Properties", "Adjoint and Inverse", "Systems of Linear Equations", "Area of Triangle using Determinants"],
+    "Continuity and Differentiability": ["Continuity", "Differentiability", "Chain Rule", "Implicit Differentiation", "Logarithmic Differentiation", "Parametric Differentiation", "Second Order Derivatives"],
+    "Applications of Derivatives": ["Rate of Change", "Increasing and Decreasing Functions", "Tangents and Normals", "Maxima and Minima", "Rolle's and Mean Value Theorems"],
+    "Integral Calculus": ["Indefinite Integrals", "Integration by Substitution", "Integration by Parts", "Partial Fractions", "Definite Integrals", "Properties of Definite Integrals", "Area Under Curves"],
+    "Differential Equations": ["Order and Degree", "Formation of Differential Equations", "Variable Separable Method", "Homogeneous Equations", "Linear Differential Equations"],
+    "Vector Algebra": ["Vectors and their Types", "Magnitude and Direction Cosines", "Addition of Vectors", "Scalar (Dot) Product", "Vector (Cross) Product", "Scalar Triple Product"],
+    "Three Dimensional Geometry": ["Direction Cosines and Ratios", "Equation of a Line", "Angle Between Lines", "Shortest Distance Between Lines", "Equation of a Plane", "Angle Between Line and Plane"],
+    Probability: ["Classical Probability", "Addition Theorem", "Conditional Probability", "Multiplication Theorem and Independent Events", "Bayes' Theorem", "Random Variables and Distributions", "Binomial Distribution"],
+  },
+};
+
+export const conceptsFor = (source, chapterName) => [...(CONCEPTS[source]?.[chapterName] ?? [])];

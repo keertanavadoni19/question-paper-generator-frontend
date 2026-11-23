@@ -1,13 +1,20 @@
 import { USE_MOCK, request } from "./api";
 import { storage } from "./storage";
-import { SEED_QUESTIONS } from "../data/questions";
+import { SEED_CONCEPTS, SEED_QUESTIONS } from "../data/questions";
 import { SUBJECT_SOURCES } from "../data/exams";
 import { sleep, uid } from "../utils/helpers";
+
+const SEED_CHAPTER = Object.fromEntries(SEED_QUESTIONS.map((q) => [q.id, q.chapter]));
+// Seed question saved before concepts existed (and still in its original chapter).
+const needsConceptTag = (q) => !q.concept && SEED_CONCEPTS[q.id] && SEED_CHAPTER[q.id] === q.chapter;
 
 export function getQuestionsSync() {
   let questions = storage.get("questions");
   if (!questions) {
     questions = SEED_QUESTIONS;
+    storage.set("questions", questions);
+  } else if (questions.some(needsConceptTag)) {
+    questions = questions.map((q) => (needsConceptTag(q) ? { ...q, concept: SEED_CONCEPTS[q.id] } : q));
     storage.set("questions", questions);
   }
   return questions;
