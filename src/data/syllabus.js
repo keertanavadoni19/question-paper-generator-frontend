@@ -1,4 +1,5 @@
 import { EXAMS, SUBJECT_SOURCES } from "./exams";
+import { conceptsFor } from "./concepts";
 
 // Master chapter list: [chapter name, class (11 / 12), default weightage]
 const CHAPTERS = {
@@ -116,6 +117,7 @@ export function chaptersFor(subjectId) {
       classLevel,
       weightage,
       source,
+      concepts: conceptsFor(source, name),
       active: true,
     }))
   );

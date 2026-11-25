@@ -47,9 +47,12 @@ Optional: `cp .env.example .env` to change the API URL or turn mock mode off.
 | **Syllabus** *(Admin)* | Turn chapters on/off, rename, add or delete them, set the class (11/12) and weightage per exam and subject, reset to the default list |
 | **Question bank** | Search and filter; add, edit or delete questions (MCQ or numerical, with a solution); preview AI-generated questions before saving them |
 | **Generate paper** | Exam → title, institute, duration, instructions → subjects and chapters → full pattern or custom counts → difficulty mix → **1–8 sets** → AI generation with progress |
-| **Preview & edit** | Exam-style paper sheet, set tabs A–H, show/hide answers and solutions, edit/regenerate/delete/add questions (auto-saved), rebuild sets, mark final, answer key panel |
+| **Concept selection** | Every Physics, Chemistry and Maths chapter has a **Select Concepts** button. Pick concepts **manually** (checkboxes, select all / clear) or let **Automatic** mode spread picks across the chapter based on its expected question count. Choices are kept per chapter and survive All / None / Class 11 / Class 12 |
+| **Preview & edit** | Live document preview with real pages, page numbers, zoom and full screen; set tabs A–H; show/hide answers and solutions; select, edit on the page, duplicate, move up/down, drag to reorder, regenerate, delete and add questions; undo/redo and find & replace (all auto-saved); answer key panel |
+| **Document formatting** | Toolbar tabs: **Numbering** (start at any number, continuous or per section, `1.` / `Q1.` / `Question 1.`), **Font** and **Paragraph** per document part (title, college, subject, exam details, instructions, section headings, questions, options, marks), **Page layout** (A4/A3/Letter/Legal, portrait/landscape, Word margin presets or custom, page border), **Header & footer** (college, university, department, exam, year, semester, subject code/name, date, faculty, logo, running header, footer, page numbers), **Insert** (page break, line, table, text/lists, image, instructions, watermark) |
+| **Sections** | Rename headings, reorder sections, heading size, section instructions, marks per question, start on a new page |
 | **Multiple sets** | Set A keeps the master order. Sets B–H shuffle question order and/or MCQ options, each with its own answer key |
-| **Export** | PDF (browser print → "Save as PDF") or Word (.doc). Choose sets, the paper or the answer key only, and optionally the key and solutions |
+| **Export** | PDF (print dialog → "Save as PDF"), editable **Word (.docx)**, or Print. Uses the same layout as the preview (fonts, numbering, margins, header/footer, page numbers, watermark). Choose sets, the paper or the answer key only, and optionally the key and solutions |
 | **Analytics** | Weekly trend, papers by exam, difficulty and source donuts, subject and chapter usage, teacher activity (Admin) |
 | **Users** *(Admin)* | Change role, activate/deactivate, remove |
 | **Settings** | Edit your profile, see the backend mode, reset demo data |
@@ -112,6 +115,24 @@ qp-generator-frontend/
 | PUT/DELETE | `/papers/:id` | Preview (auto-save), Papers |
 | POST | `/papers/:id/questions/:qid/regenerate` → Question | Preview |
 | GET | `/analytics` | Dashboard, Analytics |
+
+**Paper layout.** Formatting is stored on the paper as `paper.layout` (numbering, fonts, page setup,
+header/footer, watermark, section settings and inserted blocks; see `src/services/paperLayout.js`).
+Your backend only has to save and return this field with the paper (`PUT /papers/:id`). Question
+numbers, marks (`question.marks` / `question.negative`) and set orders live in the existing fields.
+
+**Concepts.** Each chapter returned by `GET /syllabus/:examId` has `concepts: string[]`, and each
+question may have a `concept` (one of its chapter's concepts). In the `POST /papers/generate` config,
+every section carries the chosen concepts per chapter:
+
+```json
+{ "subjectId": "physics", "chapters": ["Laws of Motion", "Kinematics"], "mcq": 20, "numerical": 5,
+  "concepts": { "Laws of Motion": { "mode": "manual", "selected": ["Newton's Second Law", "Impulse"] },
+                "Kinematics":     { "mode": "auto",   "selected": ["Projectile Motion", "Graphs of Motion"] } } }
+```
+
+Chapters missing from `concepts` use all their concepts. For `auto`, `selected` is what the frontend
+picked (see `src/utils/concepts.js`); the backend may use it as-is or apply its own selection.
 
 The shape of a **Paper**, **Question** and the generation **config** is documented by the mock
 implementation in `src/services/paperService.js` (`buildPaper`). Your backend should return the same fields.

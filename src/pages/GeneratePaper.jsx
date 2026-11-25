@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Sparkles, ChevronDown, Check, CircleCheck, LoaderCircle, Database, WandSparkles, TriangleAlert } from "lucide-react";
+import { Sparkles, ChevronDown, Check, CircleCheck, LoaderCircle, Database, WandSparkles, TriangleAlert, ListChecks } from "lucide-react";
 
 import PageHeader from "../components/ui/PageHeader";
 import Card from "../components/ui/Card";
@@ -11,12 +11,14 @@ import Toggle from "../components/ui/Toggle";
 import Tabs from "../components/ui/Tabs";
 import Modal from "../components/ui/Modal";
 import Loader from "../components/ui/Loader";
+import ConceptPicker from "../components/paper/ConceptPicker";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { EXAMS, SUBJECTS, SUBJECT_SOURCES, SET_LABELS, getExam } from "../data/exams";
 import { getSyllabus } from "../services/syllabusService";
 import { getQuestionsSync } from "../services/questionService";
 import { GENERATION_STEPS, generatePaper } from "../services/paperService";
+import { expectedQuestions, matchesConcepts, resolveConcepts, selectedConcepts } from "../utils/concepts";
 
 const PRESETS = [
   { label: "Easy", mix: { easy: 50, medium: 35, hard: 15 } },
@@ -28,13 +30,31 @@ const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
 function SectionRow({ section, exam, mode, onChange, bankCount }) {
   const [open, setOpen] = useState(false);
+  const [picker, setPicker] = useState(null); // chapter whose concepts are being chosen
   const subject = SUBJECTS[section.subjectId];
   const pattern = exam.subjects.find((s) => s.subjectId === section.subjectId);
   const total = section.mcq + section.numerical;
   const allChapters = section.available;
+  const conceptFilters = Object.keys(resolveConcepts(section)).length;
 
   const toggleChapter = (name) =>
     onChange({ chapters: section.chapters.includes(name) ? section.chapters.filter((c) => c !== name) : [...section.chapters, name] });
+
+  // Expected questions for a chapter, counted as if it were selected (so unticked chapters get a fair estimate).
+  const expected = expectedQuestions(section);
+  const expectedFor = (name) =>
+    section.chapters.includes(name) ? expected[name] : expectedQuestions({ ...section, chapters: [...section.chapters, name] })[name];
+
+  // Concept choices are kept per chapter, separately from the chapter ticks,
+  // so All / None / Class filters never erase them.
+  const saveConcepts = (chapter, selection) => {
+    const rest = Object.fromEntries(Object.entries(section.conceptSelections).filter(([name]) => name !== chapter.name));
+    onChange({
+      conceptSelections: selection ? { ...rest, [chapter.name]: selection } : rest,
+      ...(selection && !section.chapters.includes(chapter.name) ? { chapters: [...section.chapters, chapter.name] } : {}),
+    });
+    setPicker(null);
+  };
 
   return (
     <div className={`rounded-xl border ${section.enabled ? "border-slate-200" : "border-dashed border-slate-200 bg-slate-50/60"}`}>
@@ -45,7 +65,7 @@ function SectionRow({ section, exam, mode, onChange, bankCount }) {
           <span>
             <span className="block text-sm font-semibold text-slate-900">{subject.name}</span>
             <span className="block text-xs text-slate-500">
-              {section.chapters.length}/{allChapters.length} chapters · <Database className="inline h-3 w-3" /> {bankCount} in bank
+              {section.chapters.length}/{allChapters.length} chapters{conceptFilters > 0 && ` · ${conceptFilters} with chosen concepts`} · <Database className="inline h-3 w-3" /> {bankCount} in bank
             </span>
           </span>
         </label>
@@ -102,16 +122,55 @@ function SectionRow({ section, exam, mode, onChange, bankCount }) {
               <button type="button" className="text-slate-500" onClick={() => onChange({ chapters: allChapters.filter((c) => c.classLevel === 12).map((c) => c.name) })}>Class 12</button>
             </div>
           </div>
-          <div className="grid gap-1.5 sm:grid-cols-2">
-            {allChapters.map((c) => (
-              <label key={c.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
-                <input type="checkbox" className="h-4 w-4 accent-indigo-600" checked={section.chapters.includes(c.name)} onChange={() => toggleChapter(c.name)} />
-                <span className="flex-1">{c.name}</span>
-                <span className="text-[11px] text-slate-400">XI{c.classLevel === 12 ? "I" : ""}</span>
-              </label>
-            ))}
+          <div className="grid gap-1.5 2xl:grid-cols-2">
+            {allChapters.map((c) => {
+              const checked = section.chapters.includes(c.name);
+              const selection = section.conceptSelections[c.name];
+              const chosen = selectedConcepts(c, selection, expectedFor(c.name));
+              return (
+                <div key={c.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition ${checked ? "border-indigo-100 bg-indigo-50/50" : "border-transparent hover:bg-slate-50"}`}>
+                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm">
+                    <input type="checkbox" className="h-4 w-4 shrink-0 accent-indigo-600" checked={checked} onChange={() => toggleChapter(c.name)} />
+                    <span className={`flex-1 ${checked ? "font-medium text-slate-800" : "text-slate-500"}`}>{c.name}</span>
+                    <span className="text-[11px] text-slate-400">XI{c.classLevel === 12 ? "I" : ""}</span>
+                  </label>
+                  {c.concepts?.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPicker(c)}
+                      aria-label={`Select concepts for ${c.name}`}
+                      title={chosen ? chosen.join(", ") : "All concepts included"}
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition ${
+                        !selection
+                          ? "border-slate-200 bg-white text-indigo-600 hover:border-indigo-300"
+                          : selection.mode === "auto"
+                            ? "border-pink-200 bg-pink-50 text-pink-700 hover:border-pink-300"
+                            : "border-indigo-200 bg-indigo-100 text-indigo-700 hover:border-indigo-300"
+                      }`}
+                    >
+                      {selection?.mode === "auto" ? <WandSparkles className="h-3.5 w-3.5" /> : <ListChecks className="h-3.5 w-3.5" />}
+                      {chosen ? (
+                        <span className="tabular-nums">{selection.mode === "auto" ? "Auto" : "Manual"} · {chosen.length}/{c.concepts.length}</span>
+                      ) : (
+                        <span><span className="hidden sm:inline">Select </span>Concepts</span>
+                      )}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
+      )}
+      {picker && (
+        <ConceptPicker
+          chapter={picker}
+          subjectName={subject.name}
+          selection={section.conceptSelections[picker.name]}
+          expected={expectedFor(picker.name)}
+          onSave={(selection) => saveConcepts(picker, selection)}
+          onClose={() => setPicker(null)}
+        />
       )}
       {section.enabled && !section.chapters.length && (
         <p className="flex items-center gap-1 px-4 pb-3 text-xs text-red-600"><TriangleAlert className="h-3.5 w-3.5" />Select at least one chapter.</p>
@@ -150,7 +209,7 @@ export default function GeneratePaper() {
           const available = (syllabus[s.subjectId] ?? []).filter((c) => c.active);
           // KCET: candidates write PCM or PCB, so Biology starts switched off
           const enabled = !(exam.id === "kcet" && s.subjectId === "biology");
-          return { ...s, enabled, available, chapters: available.map((c) => c.name) };
+          return { ...s, enabled, available, chapters: available.map((c) => c.name), conceptSelections: {} };
         })
       );
       setDetails((d) => ({ ...d, title: `${exam.name} Practice Paper`, durationMinutes: exam.durationMinutes }));
@@ -164,7 +223,8 @@ export default function GeneratePaper() {
   const bank = useMemo(() => getQuestionsSync(), []);
   const bankCount = (section) => {
     const sources = SUBJECT_SOURCES[section.subjectId] ?? [section.subjectId];
-    return bank.filter((q) => sources.includes(q.subjectId) && section.chapters.includes(q.chapter)).length;
+    const concepts = resolveConcepts(section);
+    return bank.filter((q) => sources.includes(q.subjectId) && section.chapters.includes(q.chapter) && matchesConcepts(q, concepts)).length;
   };
 
   const updateSection = (subjectId, changes) =>
@@ -194,6 +254,7 @@ export default function GeneratePaper() {
   const totalQuestions = enabled.reduce((sum, s) => sum + s.mcq + s.numerical, 0);
   const totalMarks = exam ? totalQuestions * exam.marking.correct : 0;
   const bankTotal = enabled.reduce((sum, s) => sum + Math.min(bankCount(s), s.mcq + s.numerical), 0);
+  const conceptChapters = enabled.reduce((sum, s) => sum + Object.keys(resolveConcepts(s)).length, 0);
 
   const validate = () => {
     const found = {};
@@ -221,7 +282,8 @@ export default function GeneratePaper() {
       shuffleQuestions,
       shuffleOptions,
       mode,
-      sections: enabled.map(({ subjectId, chapters, mcq, numerical }) => ({ subjectId, chapters, mcq, numerical })),
+      // concepts: { [chapter]: { mode: "manual" | "auto", selected: string[] } } — chapters not listed use all concepts
+      sections: enabled.map((s) => ({ subjectId: s.subjectId, chapters: s.chapters, mcq: s.mcq, numerical: s.numerical, concepts: resolveConcepts(s) })),
     };
     try {
       setProgress(0);
@@ -344,6 +406,7 @@ export default function GeneratePaper() {
                   ["Exam", exam.name],
                   ["Subjects", enabled.map((s) => SUBJECTS[s.subjectId].short).join(" · ") || "—"],
                   ["Questions", totalQuestions],
+                  ["Concepts", conceptChapters ? `Chosen in ${conceptChapters} chapter${conceptChapters > 1 ? "s" : ""}` : "All"],
                   ["Total marks", totalMarks],
                   ["Marking", `+${exam.marking.correct} / ${exam.marking.incorrect || 0}`],
                   ["Duration", `${details.durationMinutes || 0} min`],

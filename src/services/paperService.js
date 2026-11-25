@@ -5,6 +5,7 @@ import { getSyllabusSync } from "./syllabusService";
 import { generateQuestion, placeholderQuestion } from "./mockAi";
 import { EXAMS, SET_LABELS, SUBJECT_SOURCES, getExam, getSubject } from "../data/exams";
 import { shuffle, sleep, uid } from "../utils/helpers";
+import { matchesConcepts } from "../utils/concepts";
 
 export const GENERATION_STEPS = [
   "Reading exam pattern & syllabus",
@@ -33,14 +34,24 @@ export function buildSets(paper, count, { shuffleQuestions = true, shuffleOption
   });
 }
 
+// Question numbering from paper.layout.numbering:
+//   start – first number (default 1); scope – "continuous" across sections or restart per "section".
+export function numberingOf(paper) {
+  const n = paper.layout?.numbering ?? {};
+  const start = Number.isFinite(Number(n.start)) && Number(n.start) >= 0 ? Math.floor(Number(n.start)) : 1;
+  return { start, scope: n.scope === "section" ? "section" : "continuous" };
+}
+
 // Returns the paper as it looks in a given set: sections → numbered questions
 // with options re-ordered and the correct option index for that set.
 export function getSetView(paper, label) {
   const set = paper.sets.find((s) => s.label === label) ?? paper.sets[0];
   const byId = Object.fromEntries(paper.questions.map((q) => [q.id, q]));
-  let number = 0;
+  const { start, scope } = numberingOf(paper);
+  let number = start - 1;
 
   return paper.sections.map((section) => {
+    if (scope === "section") number = start - 1;
     const inSection = paper.questions.filter((q) => q.sectionId === section.subjectId);
     const ordered = [
       ...set.order.map((id) => byId[id]).filter((q) => q && q.sectionId === section.subjectId),
@@ -62,6 +73,88 @@ export function getSetView(paper, label) {
   });
 }
 
+// ── Editing helpers (pure: they return a new paper) ────────────
+// Question order of one set, complete and grouped by section (as displayed).
+const setOrder = (paper, label) => getSetView(paper, label).flatMap((s) => s.questions.map((q) => q.id));
+
+// Moves a question before/after another question of the same section in one set.
+// In Set A (the master order) the paper's own question order follows, so later
+// rebuilt sets start from it. Answer keys are derived from the order, so they stay in sync.
+export function moveQuestion(paper, label, id, targetId, position = "before") {
+  if (id === targetId) return paper;
+  const order = setOrder(paper, label).filter((x) => x !== id);
+  const at = order.indexOf(targetId);
+  if (at < 0) return paper;
+  order.splice(position === "after" ? at + 1 : at, 0, id);
+  const isMaster = paper.sets[0]?.label === label;
+  const byId = Object.fromEntries(paper.questions.map((q) => [q.id, q]));
+  return {
+    ...paper,
+    questions: isMaster ? order.map((x) => byId[x]).filter(Boolean) : paper.questions,
+    sets: paper.sets.map((s) => (s.label === label ? { ...s, order } : s)),
+  };
+}
+
+// Moves a question one place up (-1) or down (+1) within its section in one set.
+export function stepQuestion(paper, label, id, step) {
+  const section = getSetView(paper, label).find((s) => s.questions.some((q) => q.id === id));
+  const ids = section?.questions.map((q) => q.id) ?? [];
+  const target = ids[ids.indexOf(id) + step];
+  return target ? moveQuestion(paper, label, id, target, step > 0 ? "after" : "before") : paper;
+}
+
+// Copies a question and places the copy right after the original in every set.
+export function duplicateQuestion(paper, id) {
+  const original = paper.questions.find((q) => q.id === id);
+  if (!original) return paper;
+  const copy = { ...structuredClone(original), id: uid("PQ"), bankId: undefined };
+  const insertAfter = (list) => {
+    const i = list.indexOf(id);
+    return i < 0 ? [...list, copy.id] : [...list.slice(0, i + 1), copy.id, ...list.slice(i + 1)];
+  };
+  const qi = paper.questions.indexOf(original);
+  return {
+    ...paper,
+    questions: [...paper.questions.slice(0, qi + 1), copy, ...paper.questions.slice(qi + 1)],
+    sets: paper.sets.map((s) => ({
+      ...s,
+      order: insertAfter(s.order),
+      optionOrder: { ...s.optionOrder, [copy.id]: [...(s.optionOrder[id] ?? copy.options.map((_, i) => i))] },
+    })),
+  };
+}
+
+// Removes a question from the paper and from every set (and any block anchored to it moves up).
+export function removeQuestion(paper, id) {
+  const layout = paper.layout;
+  return {
+    ...paper,
+    questions: paper.questions.filter((q) => q.id !== id),
+    sets: paper.sets.map((s) => {
+      const { [id]: _removed, ...optionOrder } = s.optionOrder;
+      return { ...s, order: s.order.filter((qid) => qid !== id), optionOrder };
+    }),
+    ...(layout?.blocks?.length
+      ? { layout: { ...layout, blocks: layout.blocks.map((b) => (b.after === `q:${id}` ? { ...b, after: `section:${paper.questions.find((q) => q.id === id)?.sectionId}` } : b)) } }
+      : {}),
+  };
+}
+
+// Edits a question's content. Option permutations of every set are kept when the
+// number of options is unchanged, so each set's answer key follows the new correct answer.
+export function updateQuestion(paper, id, data) {
+  return {
+    ...paper,
+    questions: paper.questions.map((q) => (q.id === id ? { ...q, ...data, id, sectionId: q.sectionId } : q)),
+    sets: paper.sets.map((s) => {
+      const perm = s.optionOrder[id];
+      const count = data.options?.length;
+      if (count === undefined || perm?.length === count) return s;
+      return { ...s, optionOrder: { ...s.optionOrder, [id]: Array.from({ length: count }, (_, i) => i) } };
+    }),
+  };
+}
+
 export function paperTotals(paper) {
   const questions = paper.questions.length;
   return { questions, marks: paper.questions.reduce((sum, q) => sum + (q.marks ?? 0), 0) };
@@ -77,12 +170,14 @@ function difficultyQuota(total, mix) {
 function pickForSection({ exam, section, type, count, mix, used }) {
   const sources = SUBJECT_SOURCES[section.subjectId] ?? [section.subjectId];
   const chapters = section.chapters;
+  const concepts = section.concepts; // { [chapter]: { mode, selected } } — chapters without an entry use every concept
   const bank = shuffle(
     getQuestionsSync().filter(
       (q) =>
         sources.includes(q.subjectId) &&
         q.type === type &&
         (!chapters.length || chapters.includes(q.chapter)) &&
+        matchesConcepts(q, concepts) &&
         !used.has(q.id)
     )
   );
@@ -106,8 +201,8 @@ function pickForSection({ exam, section, type, count, mix, used }) {
   while (result.length < count) {
     const subjectId = generatorSubjects[result.length % generatorSubjects.length];
     const generated =
-      generateQuestion({ subjectId, chapters, type, examId: exam.id }) ??
-      placeholderQuestion({ subjectId, chapters, type, difficulty: ["easy", "medium", "hard"][result.length % 3], examId: exam.id });
+      generateQuestion({ subjectId, chapters, type, examId: exam.id, concepts }) ??
+      placeholderQuestion({ subjectId, chapters, type, difficulty: ["easy", "medium", "hard"][result.length % 3], examId: exam.id, concepts, slot: result.length });
     result.push({ ...generated, id: uid("PQ") });
   }
   return result;

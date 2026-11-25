@@ -1,12 +1,31 @@
 import { USE_MOCK, request } from "./api";
 import { storage } from "./storage";
 import { buildDefaultSyllabus } from "../data/syllabus";
+import { conceptsFor } from "../data/concepts";
 import { sleep, uid } from "../utils/helpers";
+
+// Syllabi saved before concepts existed: attach each chapter's default concept list.
+function addMissingConcepts(syllabus) {
+  let changed = false;
+  for (const subjects of Object.values(syllabus)) {
+    for (const chapters of Object.values(subjects)) {
+      for (const chapter of chapters) {
+        if (!Array.isArray(chapter.concepts)) {
+          chapter.concepts = conceptsFor(chapter.source, chapter.name);
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed;
+}
 
 function load() {
   let syllabus = storage.get("syllabus");
   if (!syllabus) {
     syllabus = buildDefaultSyllabus();
+    storage.set("syllabus", syllabus);
+  } else if (addMissingConcepts(syllabus)) {
     storage.set("syllabus", syllabus);
   }
   return syllabus;
@@ -38,6 +57,7 @@ export const newChapter = (name, classLevel = 11, weightage = "medium") => ({
   classLevel: Number(classLevel),
   weightage,
   source: "custom",
+  concepts: [],
   active: true,
 });
 

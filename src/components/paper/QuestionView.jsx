@@ -41,6 +41,7 @@ export default function QuestionView({ question: q, showAnswers, showSolutions, 
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             <Badge color="slate">{q.chapter}</Badge>
+            {q.concept && <Badge color="slate" className="font-normal">{q.concept}</Badge>}
             <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>
             {q.type === "numerical" && <Badge color="cyan">Numerical</Badge>}
             {q.bankId && <Badge color="indigo"><Database className="h-3 w-3" />Bank</Badge>}
