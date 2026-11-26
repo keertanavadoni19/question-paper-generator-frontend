@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, Sparkles, ChevronLeft, ChevronRight, Library, ChevronDown } from "lucide-react";
 
 import PageHeader from "../components/ui/PageHeader";
@@ -14,7 +14,10 @@ import EmptyState from "../components/ui/EmptyState";
 import QuestionForm from "../components/paper/QuestionForm";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { createQuestion, deleteQuestion, listQuestions, updateQuestion } from "../services/questionService";
+import { bankStats, createQuestion, deleteQuestion, searchQuestions, updateQuestion } from "../services/questionService";
+import { useSubjectChapters } from "../services/syllabusService";
+import { USE_MOCK } from "../services/api";
+import RichText from "../components/ui/RichText";
 import { generateQuestion, canGenerate } from "../services/mockAi";
 import { EXAMS, SUBJECTS, getExam } from "../data/exams";
 import { chaptersFor } from "../data/syllabus";
@@ -111,7 +114,10 @@ function AiGenerateDialog({ open, onClose, onSave }) {
 export default function QuestionBank() {
   const { user, isAdmin } = useAuth();
   const toast = useToast();
-  const [questions, setQuestions] = useState(null);
+  const [result, setResult] = useState(null); // { items, total } for the current page
+  const [stats, setStats] = useState(null);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
   const [filters, setFilters] = useState({ search: "", subjectId: "", examId: "", difficulty: "", type: "", chapter: "" });
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState(null);
@@ -120,50 +126,59 @@ export default function QuestionBank() {
   const [toDelete, setToDelete] = useState(null);
   const [aiOpen, setAiOpen] = useState(false);
 
+  const chapterOptions = useSubjectChapters(filters.subjectId).map((c) => c.name);
+
+  // Server-side search & paging (the real bank has ~80,000 questions); typing is debounced.
   useEffect(() => {
-    listQuestions().then(setQuestions);
-  }, []);
+    let alive = true;
+    const timer = setTimeout(() => {
+      setError("");
+      searchQuestions({ ...filters, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+        .then((r) => alive && setResult(r))
+        .catch((err) => {
+          if (!alive) return;
+          setError(err.message);
+          setResult({ items: [], total: 0 });
+        });
+    }, filters.search ? 300 : 0);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [filters, page, reload]);
+
+  useEffect(() => {
+    bankStats().then(setStats).catch(() => setStats(null));
+  }, [reload]);
 
   const setFilter = (key, value) => {
     setFilters((f) => ({ ...f, [key]: value, ...(key === "subjectId" ? { chapter: "" } : {}) }));
     setPage(1);
   };
 
-  const filtered = useMemo(() => {
-    if (!questions) return [];
-    const term = filters.search.trim().toLowerCase();
-    return questions.filter(
-      (q) =>
-        (!filters.subjectId || q.subjectId === filters.subjectId) &&
-        (!filters.examId || q.examIds?.includes(filters.examId)) &&
-        (!filters.difficulty || q.difficulty === filters.difficulty) &&
-        (!filters.type || q.type === filters.type) &&
-        (!filters.chapter || q.chapter === filters.chapter) &&
-        (!term || q.text.toLowerCase().includes(term) || q.chapter.toLowerCase().includes(term) || q.id.toLowerCase().includes(term))
-    );
-  }, [questions, filters]);
-
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const canModify = (q) => isAdmin || q.createdBy === user.id;
+  const total = result?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageItems = result?.items ?? [];
+  // With the shared Supabase bank only admins change or delete questions.
+  const canModify = (q) => isAdmin || (USE_MOCK && q.createdBy === user.id);
 
   const handleCreate = async (data) => {
-    const created = await createQuestion(data, user);
-    setQuestions((list) => [created, ...list]);
+    await createQuestion(data, user);
+    setReload((n) => n + 1);
     setFormOpen(false);
-    toast.success("Question added to bank");
+    toast.success(USE_MOCK ? "Question added to bank" : "Question added to the bank (pending review)");
   };
 
   const handleUpdate = async (data) => {
     const updated = await updateQuestion(editing.id, data);
-    setQuestions((list) => list.map((q) => (q.id === updated.id ? updated : q)));
+    setResult((r) => ({ ...r, items: r.items.map((q) => (q.id === updated.id ? updated : q)) }));
     setEditing(null);
     toast.success("Question updated");
   };
 
   const handleDelete = async () => {
     await deleteQuestion(toDelete.id);
-    setQuestions((list) => list.filter((q) => q.id !== toDelete.id));
+    setReload((n) => n + 1);
     setToDelete(null);
     toast.success("Question deleted");
   };
@@ -171,13 +186,11 @@ export default function QuestionBank() {
   const handleAiSave = async (drafts) => {
     const created = [];
     for (const d of drafts) created.push(await createQuestion({ ...d, source: "ai" }, user));
-    setQuestions((list) => [...created, ...list]);
+    setReload((n) => n + 1);
     toast.success(`${created.length} AI question${created.length > 1 ? "s" : ""} added`);
   };
 
-  const counts = questions
-    ? BANK_SUBJECTS.map((id) => ({ id, n: questions.filter((q) => q.subjectId === id).length }))
-    : [];
+  const counts = stats ? BANK_SUBJECTS.map((id) => ({ id, n: stats.bySubject?.[id] ?? 0 })) : [];
 
   return (
     <>
@@ -192,14 +205,14 @@ export default function QuestionBank() {
         }
       />
 
-      {questions && (
+      {stats && (
         <div className="mb-4 flex flex-wrap gap-2">
           <button type="button" onClick={() => setFilter("subjectId", "")} className={`rounded-full px-3 py-1 text-sm font-medium ${!filters.subjectId ? "bg-indigo-600 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>
-            All <span className="opacity-75">{questions.length}</span>
+            All <span className="opacity-75">{stats.total.toLocaleString("en-IN")}</span>
           </button>
           {counts.map(({ id, n }) => (
             <button key={id} type="button" onClick={() => setFilter("subjectId", id)} className={`rounded-full px-3 py-1 text-sm font-medium ${filters.subjectId === id ? "bg-indigo-600 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>
-              {SUBJECTS[id].name} <span className="opacity-75">{n}</span>
+              {SUBJECTS[id].name} <span className="opacity-75">{n.toLocaleString("en-IN")}</span>
             </button>
           ))}
         </div>
@@ -208,17 +221,18 @@ export default function QuestionBank() {
       <Card bodyClassName="p-0">
         <div className="grid gap-3 border-b border-slate-100 p-4 md:grid-cols-5">
           <SearchInput value={filters.search} onChange={(v) => setFilter("search", v)} placeholder="Search text, chapter or ID" className="md:col-span-2" />
-          <Select value={filters.chapter} onChange={(e) => setFilter("chapter", e.target.value)} placeholder="All chapters" options={filters.subjectId ? chaptersFor(filters.subjectId).map((c) => c.name) : []} disabled={!filters.subjectId} aria-label="Filter by chapter" />
+          <Select value={filters.chapter} onChange={(e) => setFilter("chapter", e.target.value)} placeholder="All chapters" options={filters.subjectId ? chapterOptions : []} disabled={!filters.subjectId} aria-label="Filter by chapter" />
           <Select value={filters.examId} onChange={(e) => setFilter("examId", e.target.value)} placeholder="All exams" options={EXAMS.map((e) => ({ value: e.id, label: e.name }))} aria-label="Filter by exam" />
           <div className="grid grid-cols-2 gap-3">
-            <Select value={filters.difficulty} onChange={(e) => setFilter("difficulty", e.target.value)} placeholder="Level" options={[{ value: "easy", label: "Easy" }, { value: "medium", label: "Medium" }, { value: "hard", label: "Hard" }]} aria-label="Filter by difficulty" />
+            <Select value={filters.difficulty} onChange={(e) => setFilter("difficulty", e.target.value)} disabled={!USE_MOCK} title={USE_MOCK ? undefined : "The question bank does not record difficulty"} placeholder="Level" options={[{ value: "easy", label: "Easy" }, { value: "medium", label: "Medium" }, { value: "hard", label: "Hard" }]} aria-label="Filter by difficulty" />
             <Select value={filters.type} onChange={(e) => setFilter("type", e.target.value)} placeholder="Type" options={[{ value: "mcq", label: "MCQ" }, { value: "numerical", label: "Numerical" }]} aria-label="Filter by type" />
           </div>
         </div>
 
-        {!questions ? (
+        {error && <p className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</p>}
+        {!result ? (
           <Loader />
-        ) : !filtered.length ? (
+        ) : !pageItems.length ? (
           <EmptyState icon={Library} title="No questions found" message="Change the filters or add a new question." action={<Button size="sm" icon={Plus} onClick={() => setFormOpen(true)}>Add question</Button>} />
         ) : (
           <>
@@ -230,13 +244,16 @@ export default function QuestionBank() {
                       <ChevronDown className={`h-4 w-4 transition ${expanded === q.id ? "rotate-180" : ""}`} />
                     </button>
                     <div className="min-w-0 flex-1">
-                      <p className={`text-sm text-slate-800 ${expanded === q.id ? "" : "line-clamp-2"}`}>{q.text}</p>
+                      <RichText as="div" text={q.text} className={`text-sm text-slate-800 ${expanded === q.id ? "" : "line-clamp-3"}`} />
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         <span className="font-mono text-[11px] text-slate-400">{q.id}</span>
                         <Badge color="slate">{SUBJECTS[q.subjectId]?.name}</Badge>
                         <Badge>{q.chapter}</Badge>
-                        <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>
+                        {q.concept && <Badge color="slate" className="font-normal">{q.concept}</Badge>}
+                        {q.difficulty && <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>}
                         {q.type === "numerical" && <Badge color="cyan">Numerical</Badge>}
+                        {q.format === "assertion_reason" && <Badge color="indigo">Assertion–Reason</Badge>}
+                        {q.reviewStatus === "pending" && <Badge color="amber">Pending review</Badge>}
                         {q.source === "ai" && <Badge color="pink">AI</Badge>}
                         <span className="text-[11px] text-slate-400">{q.examIds?.map((id) => getExam(id)?.name).join(" · ")}</span>
                       </div>
@@ -245,13 +262,13 @@ export default function QuestionBank() {
                           {q.type === "mcq" ? (
                             <ol className="grid gap-1 sm:grid-cols-2">
                               {q.options.map((o, i) => (
-                                <li key={i} className={i === Number(q.answer) ? "font-semibold text-green-700" : "text-slate-700"}>({optionLetter(i)}) {o}{i === Number(q.answer) ? " ✓" : ""}</li>
+                                <li key={i} className={i === Number(q.answer) ? "font-semibold text-green-700" : "text-slate-700"}>({optionLetter(i)}) <RichText text={o} />{i === Number(q.answer) ? " ✓" : ""}</li>
                               ))}
                             </ol>
                           ) : (
                             <p className="font-semibold text-green-700">Answer: {q.answer}</p>
                           )}
-                          {q.solution && <p className="mt-2 text-slate-600"><b>Solution:</b> {q.solution}</p>}
+                          {q.solution && <div className="mt-2 text-slate-600"><b>Solution:</b> <RichText as="div" text={q.solution} /></div>}
                         </div>
                       )}
                     </div>
@@ -268,7 +285,7 @@ export default function QuestionBank() {
 
             <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-sm text-slate-600">
               <span>
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString("en-IN")}
               </span>
               <div className="flex items-center gap-1">
                 <Button size="icon" variant="ghost" onClick={() => setPage((p) => p - 1)} disabled={page === 1} aria-label="Previous page"><ChevronLeft className="h-4 w-4" /></Button>

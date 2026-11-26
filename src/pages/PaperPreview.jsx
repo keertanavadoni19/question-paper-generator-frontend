@@ -28,59 +28,83 @@ import {
 } from "../services/paperService";
 import { defaultInstructions } from "../services/exportService";
 import { getLayout, pageMetrics, MM_TO_PX } from "../services/paperLayout";
-import { getQuestionsSync } from "../services/questionService";
+import { searchQuestions } from "../services/questionService";
+import RichText from "../components/ui/RichText";
 import { SET_LABELS, SUBJECT_SOURCES, getExam } from "../data/exams";
 import { formatDate, optionLetter, uid } from "../utils/helpers";
 
 // ── Add-question dialog: pick from bank or write a new one ─────
+const ADD_PAGE = 20;
 function AddQuestionDialog({ open, onClose, section, paper, onAdd }) {
   const [tab, setTab] = useState("bank");
   const [search, setSearch] = useState("");
+  const [chapter, setChapter] = useState("");
+  const [limit, setLimit] = useState(ADD_PAGE);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const chapters = section?.subjectId ? (paper.config?.sections?.find((s) => s.subjectId === section.subjectId)?.chapters ?? []) : [];
 
-  const candidates = useMemo(() => {
-    if (!section) return [];
-    const sources = SUBJECT_SOURCES[section.subjectId] ?? [section.subjectId];
-    const used = new Set(paper.questions.map((q) => q.bankId).filter(Boolean));
-    const term = search.trim().toLowerCase();
-    return getQuestionsSync().filter(
-      (q) =>
-        sources.includes(q.subjectId) &&
-        !used.has(q.id) &&
-        (paper.examId !== "neet-ug" && paper.examId !== "kcet" ? true : q.type === "mcq") &&
-        (!term || q.text.toLowerCase().includes(term) || q.chapter.toLowerCase().includes(term))
-    );
-  }, [section, paper, search]);
+  // Server-side search (the Supabase bank is large); typing is debounced.
+  useEffect(() => {
+    if (!open || !section) return undefined;
+    let alive = true;
+    const timer = setTimeout(() => {
+      setError("");
+      searchQuestions({ subjectId: section.subjectId, examId: paper.examId, chapter, search: search.trim(), limit, offset: 0 })
+        .then((r) => alive && setResult(r))
+        .catch((err) => alive && setError(err.message));
+    }, search ? 300 : 0);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [open, section, paper.examId, chapter, search, limit]);
 
   if (!section) return null;
   const sources = SUBJECT_SOURCES[section.subjectId] ?? [section.subjectId];
+  const used = new Set(paper.questions.map((q) => q.bankId).filter(Boolean));
+  const candidates = (result?.items ?? []).filter((q) => !used.has(q.bankId ?? q.id));
 
   return (
     <Modal open={open} onClose={onClose} title={`Add question · ${section.name}`} size="lg">
-      <Tabs className="mb-4" value={tab} onChange={setTab} tabs={[{ value: "bank", label: "From question bank", count: candidates.length }, { value: "new", label: "Write new" }]} />
+      <Tabs className="mb-4" value={tab} onChange={setTab} tabs={[{ value: "bank", label: "From question bank", count: result?.total }, { value: "new", label: "Write new" }]} />
       {tab === "bank" ? (
         <>
-          <div className="relative mb-3">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search question or chapter" className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100" />
+          <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_200px]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input value={search} onChange={(e) => { setSearch(e.target.value); setLimit(ADD_PAGE); }} placeholder="Search question text" className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100" />
+            </div>
+            <select value={chapter} onChange={(e) => { setChapter(e.target.value); setLimit(ADD_PAGE); }} className="rounded-lg border border-slate-300 px-2 py-2 text-sm" aria-label="Chapter">
+              <option value="">All chapters</option>
+              {chapters.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
-          {candidates.length ? (
+          {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+          {!result ? (
+            <Loader />
+          ) : candidates.length ? (
             <ul className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
               {candidates.map((q) => (
                 <li key={q.id} className="flex items-start gap-3 rounded-xl border border-slate-200 p-3">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-slate-800">{q.text}</p>
+                    <RichText as="div" text={q.text} className="text-sm text-slate-800" />
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
                       <Badge>{q.chapter}</Badge>
-                      <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>
+                      {q.concept && <Badge color="slate" className="font-normal">{q.concept}</Badge>}
+                      {q.difficulty && <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>}
                       {q.type === "numerical" && <Badge color="cyan">Numerical</Badge>}
                     </div>
                   </div>
-                  <Button size="sm" variant="soft" icon={Plus} onClick={() => onAdd({ ...q, bankId: q.id })}>Add</Button>
+                  <Button size="sm" variant="soft" icon={Plus} onClick={() => onAdd({ ...q, bankId: q.bankId ?? q.id })}>Add</Button>
                 </li>
               ))}
+              {result.total > limit && (
+                <li className="text-center"><Button size="sm" variant="ghost" onClick={() => setLimit((n) => n + ADD_PAGE)}>Show more ({result.total - limit} more)</Button></li>
+              )}
             </ul>
           ) : (
-            <EmptyState icon={Database} title="No unused bank questions" message="Write a new one instead, or add more to the question bank." />
+            <EmptyState icon={Database} title="No unused bank questions" message="Try another chapter or search, or write a new question." />
           )}
         </>
       ) : (

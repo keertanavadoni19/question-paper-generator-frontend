@@ -79,7 +79,30 @@ export const EXAMS = [
       "No negative marking. PCM for engineering, PCB for medical.",
     ],
   },
+  {
+    id: "assignment",
+    name: "Assignment",
+    fullName: "Institutional Assignment / Practice Paper",
+    conductedBy: "Institution",
+    stream: "Practice",
+    mode: "Classroom",
+    durationMinutes: 60,
+    marking: { correct: 1, incorrect: 0, unattempted: 0 },
+    questionTypes: ["mcq", "numerical"],
+    accent: "slate",
+    allSubjects: true, // the paper can include every subject at once
+    subjects: [
+      { subjectId: "physics", mcq: 20, numerical: 0 },
+      { subjectId: "chemistry", mcq: 20, numerical: 0 },
+      { subjectId: "mathematics", mcq: 20, numerical: 0 },
+      { subjectId: "biology", mcq: 20, numerical: 0 },
+    ],
+    notes: ["Flexible practice paper or assignment for your own students.", "No negative marking by default."],
+  },
 ];
+
+// Category label on each exam blueprint card (Generate · step 1)
+export const EXAM_CATEGORY = { "neet-ug": "Medical UG", "jee-main": "Engineering", kcet: "KCET", assignment: "Assignment" };
 
 export const getExam = (examId) => EXAMS.find((exam) => exam.id === examId);
 export const getSubject = (subjectId) => SUBJECTS[subjectId];

@@ -12,6 +12,11 @@ export const newSeed = () => Math.floor(Math.random() * 1_000_000);
 
 // How many questions each selected chapter is likely to get, shared out by weightage.
 export function expectedQuestions(section) {
+  // Wizard: the faculty set an exact number of questions per chapter
+  const counts = section.chapterCounts;
+  if (counts && Object.values(counts).some((n) => n > 0)) {
+    return Object.fromEntries(section.chapters.map((name) => [name, Number(counts[name]) || 0]));
+  }
   const total = (section.mcq || 0) + (section.numerical || 0);
   const chosen = section.available.filter((c) => section.chapters.includes(c.name));
   const weightSum = chosen.reduce((sum, c) => sum + (WEIGHT[c.weightage] ?? 2), 0) || 1;

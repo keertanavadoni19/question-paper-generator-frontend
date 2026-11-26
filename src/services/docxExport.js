@@ -7,10 +7,10 @@ import {
   AlignmentType, BorderStyle, Document, Footer, Header, ImageRun, LevelFormat, Packer, PageBorderDisplay, PageBorderOffsetFrom,
   PageNumber, Paragraph, ShadingType, Table, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, WidthType,
 } from "docx";
-import { TextWatermark } from "docx/watermarks";
-import { buildBlocks, makeContext, optionColumns, paperInstructions } from "./documentRenderer";
-import { MM_TO_PX, PAPER_SIZES, numberLabel, sectionHeading } from "./paperLayout";
-import { optionLetter } from "../utils/helpers";
+import { ImageWatermark, TextWatermark } from "docx/watermarks";
+import { buildBlocks, makeContext, optionColumnsFor, paperImageUrls, paperInstructions } from "./documentRenderer";
+import { latexToText, segments } from "../utils/richText";
+import { MM_TO_PX, PAPER_SIZES, numberLabel, optionLabel, sectionHeading, setDisplay } from "./paperLayout";
 
 const twips = (mm) => Math.round(mm * 56.6929);
 const hex = (color) => String(color || "#000000").replace("#", "").slice(0, 6).toUpperCase();
@@ -45,6 +45,55 @@ function paraStyle(s, extra = {}) {
 const text = (s, value, extra) => new TextRun({ ...runStyle(s, extra), text: String(value ?? "") });
 const para = (s, children, extra) => new Paragraph({ ...paraStyle(s, extra), children });
 
+// Question content: text with line breaks, LaTeX as readable Unicode, {{IMG::url}} as embedded pictures.
+function rich(s, value, ctx, extra = {}) {
+  const runs = [];
+  for (const seg of segments(value)) {
+    if (seg.type === "image") {
+      const img = ctx.images?.get(seg.value);
+      if (img) {
+        const maxW = Math.min(ctx.metrics.contentWidth * 0.9, 150) * MM_TO_PX;
+        const maxH = 60 * MM_TO_PX;
+        const scale = Math.min(1, maxW / img.width, maxH / img.height);
+        runs.push(new TextRun({ break: 1 }), new ImageRun({ type: img.type, data: img.data, transformation: { width: Math.round(img.width * scale), height: Math.round(img.height * scale) } }), new TextRun({ break: 1 }));
+      } else {
+        runs.push(text(s, " [image] ", { ...extra, italics: true }));
+      }
+    } else if (seg.type === "math") {
+      runs.push(text(s, latexToText(seg.value), extra));
+    } else {
+      seg.value.split("\n").forEach((line, i) => runs.push(new TextRun({ ...runStyle(s, extra), text: line, break: i ? 1 : 0 })));
+    }
+  }
+  return runs;
+}
+
+// Downloads the question images once (Word files embed them). WebP is converted to PNG.
+async function loadImages(urls) {
+  const images = new Map();
+  await Promise.all(urls.map(async (url) => {
+    try {
+      const res = await fetch(url, { referrerPolicy: "no-referrer" });
+      if (!res.ok) return;
+      let blob = await res.blob();
+      const bitmap = await createImageBitmap(blob);
+      let type = (/image\/(png|jpe?g|gif|bmp)/.exec(blob.type)?.[1] ?? "").replace("jpeg", "jpg");
+      if (!type) {
+        const canvas = document.createElement("canvas");
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext("2d").drawImage(bitmap, 0, 0);
+        blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+        type = "png";
+      }
+      images.set(url, { type, data: new Uint8Array(await blob.arrayBuffer()), width: bitmap.width, height: bitmap.height });
+    } catch {
+      /* unreachable image: exported as "[image]" */
+    }
+  }));
+  return images;
+}
+
 function dataUrlImage(src, widthMm, heightMm) {
   const match = /^data:image\/(png|jpe?g|gif|bmp);base64,(.+)$/i.exec(src ?? "");
   if (!match) return null;
@@ -77,7 +126,7 @@ function headerChildren(ctx) {
     ["headerInfo", h.examination],
     ["title", paper.title],
     ["subject", join([h.subjectName, h.subjectCode && `Subject Code: ${h.subjectCode}`])],
-    ["headerInfo", join([h.academicYear && `Academic Year: ${h.academicYear}`, h.semester && `Semester: ${h.semester}`, h.examDate && `Date: ${h.examDate}`, h.faculty && `Faculty: ${h.faculty}`])],
+    ["headerInfo", join([h.className && `Class: ${h.className}`, h.academicYear && `Academic Year: ${h.academicYear}`, h.semester && `Semester: ${h.semester}`, h.examDate && `Date: ${h.examDate}`, h.faculty && `Faculty: ${h.faculty}`])],
   ]
     .filter(([, v]) => v?.trim())
     .map(([key, v]) => para(st[key], [text(st[key], v.trim())]));
@@ -111,7 +160,7 @@ function headerChildren(ctx) {
       children: [
         metaCell([text(m, "Time: "), text(m, `${paper.durationMinutes} min`, { bold: true })], "left"),
         metaCell([text(m, "Max. Marks: "), text(m, totals.marks, { bold: true })], "center"),
-        metaCell(h.showSetBadge ? [text(m, ` SET ${ctx.setLabel} `, { bold: true, border: LINE(12, "111111") })] : [], "right"),
+        metaCell(h.showSetBadge ? [text(m, ` SET ${setDisplay(layout, ctx.setLabel)} `, { bold: true, border: LINE(12, "111111") })] : [], "right"),
       ],
     })],
   }));
@@ -124,7 +173,7 @@ function questionChildren(block, ctx) {
   const st = layout.styles;
   const q = block.q;
   const s = st.question;
-  const runs = [text(s, numberLabel(layout, q.number), { bold: true }), text(s, ` ${q.text}`)];
+  const runs = [...(layout.showNumbers === false ? [] : [text(s, numberLabel(layout, q.number), { bold: true }), text(s, " ")]), ...rich(s, q.text, ctx)];
   const tabStops = [];
   if (layout.showMarks) {
     runs.push(new TextRun({ ...runStyle(st.meta), text: `\t[${q.marks}${q.negative ? `, ${q.negative}` : ""}]` }));
@@ -132,14 +181,18 @@ function questionChildren(block, ctx) {
   }
   const out = [para(s, runs, { keepNext: true, keepLines: true, tabStops })];
   const o = st.option;
-  if (q.type === "mcq") {
-    const cols = optionColumns(q.displayOptions);
+  const label = (i) => optionLabel(layout, i);
+  const answerLine = () => para({ ...o, bold: true }, [text(o, `Ans: ${q.type === "mcq" ? label(q.correctIndex) : q.answer}`, { bold: true })]);
+  if (block.hideOptions) {
+    // "Only questions with no options"
+  } else if (q.type === "mcq") {
+    const cols = optionColumnsFor(layout, q.displayOptions);
     const width = twips(metrics.contentWidth - o.indent);
     const colW = Math.floor(width / cols);
     const rows = [];
     for (let i = 0; i < q.displayOptions.length; i += cols) {
       const cells = q.displayOptions.slice(i, i + cols).map((opt, j) =>
-        cell([para({ ...o, indent: 0, spaceBefore: 0, spaceAfter: 0 }, [text(o, `(${optionLetter(i + j)}) ${opt}`)], { keepNext: true })], colW)
+        cell([para({ ...o, indent: 0, spaceBefore: 0, spaceAfter: 0 }, [text(o, `${label(i + j)} `), ...rich(o, opt, ctx)], { keepNext: true })], colW)
       );
       while (cells.length < cols) cells.push(cell([new Paragraph("")], colW));
       rows.push(new TableRow({ children: cells, cantSplit: true }));
@@ -153,9 +206,11 @@ function questionChildren(block, ctx) {
       rows,
     }));
     out.push(new Paragraph({ spacing: { before: 0, after: Math.round(o.spaceAfter * 20), line: 120 }, children: [] }));
-  } else {
+  } else if (!block.answerLine) {
     out.push(para(o, [text(o, "Answer: ____________")]));
   }
+  if (block.answerLine) out.push(answerLine());
+  if (block.showSolutions && q.solution) out.push(para({ ...o, italic: false }, [text(o, "Solution: ", { bold: true }), ...rich(o, q.solution, ctx)]));
   return out;
 }
 
@@ -255,7 +310,7 @@ function blockChildren(block, ctx, counter) {
         columnWidths: Array(10).fill(colW),
         layout: TableLayoutType.FIXED,
         borders: ALL_LINES(LINE(4, "555555")),
-        rows: [row(pad(block.questions.map((q) => String(q.number))), true), row(pad(block.questions.map((q) => (q.type === "mcq" ? optionLetter(q.correctIndex) : String(q.answer)))), false)],
+        rows: [row(pad(block.questions.map((q) => String(q.number))), true), row(pad(block.questions.map((q) => (q.type === "mcq" ? optionLabel(layout, q.correctIndex).replace(/[()]/g, "") : String(q.answer)))), false)],
       }));
       out.push(new Paragraph({ spacing: { before: 0, after: 80, line: 120 }, children: [] }));
       return out;
@@ -263,8 +318,8 @@ function blockChildren(block, ctx, counter) {
     case "solution": {
       const q = block.q;
       const s = { ...st.question, spaceAfter: 4 };
-      const ans = q.type === "mcq" ? optionLetter(q.correctIndex) : q.answer;
-      return [para(s, [text(s, numberLabel(layout, q.number), { bold: true }), text(s, ` (${ans}) ${q.solution || "—"}`)])];
+      const ans = q.type === "mcq" ? optionLabel(layout, q.correctIndex).replace(/[()]/g, "") : q.answer;
+      return [para(s, [text(s, numberLabel(layout, q.number), { bold: true }), text(s, ` (${ans}) `), ...rich(s, q.solution || "—", ctx)])];
     }
     default:
       return [];
@@ -296,6 +351,17 @@ function headerFooter(ctx) {
     headRuns.push(new TextWatermark({ text: layout.watermark.text.trim(), font: "Arial", bold: true, color: hex(layout.watermark.color), opacity: Number(layout.watermark.opacity) || 0.18, layout: "diagonal" }));
   }
 
+  const logo = layout.header.logo;
+  const emblem = layout.watermark.emblem && /^data:image\/(png|jpe?g);base64,/.exec(logo?.src ?? "");
+  if (emblem) {
+    const w = (Math.min(metrics.width, metrics.height) * 0.6 * (Number(layout.watermark.emblemSize) || 100)) / 100;
+    headRuns.push(new ImageWatermark({
+      type: emblem[1].startsWith("jp") ? "jpg" : "png",
+      data: Uint8Array.from(atob(logo.src.split(",")[1]), (c) => c.charCodeAt(0)),
+      transformation: { width: Math.round(w * MM_TO_PX), height: Math.round((w / (logo.ratio || 1)) * MM_TO_PX) },
+      washout: true,
+    }));
+  }
   const slots = { left: [], center: [], right: [] };
   if (pos.startsWith("bottom")) slots[pos.split("-")[1]] = pageNumberRuns(layout, s);
   const footText = fill(layout.footer.text);
@@ -327,8 +393,9 @@ function sectionProperties(ctx) {
 
 export async function buildDocx(paper, { sets = ["A"], ...opts } = {}) {
   const counter = { next: 1 };
+  const images = await loadImages(paperImageUrls(paper));
   const sections = sets.map((label) => {
-    const ctx = makeContext(paper, label);
+    const ctx = { ...makeContext(paper, label), images };
     const blocks = buildBlocks(paper, label, opts);
     return {
       properties: sectionProperties(ctx),

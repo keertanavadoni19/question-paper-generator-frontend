@@ -13,7 +13,8 @@ const MODES = [
 // Concept selection for one chapter. Mount it only while open (it keeps a draft until Save).
 // selection: { mode: "manual", selected } | { mode: "auto", seed } | undefined (= all concepts)
 // expected:  questions this chapter is likely to get, used by automatic mode.
-export default function ConceptPicker({ chapter, subjectName, selection, expected, onSave, onClose }) {
+// counts (optional): { [concept]: { total } } — questions available per concept in the bank
+export default function ConceptPicker({ chapter, subjectName, selection, expected, counts, onSave, onClose }) {
   const concepts = chapter.concepts;
   const [mode, setMode] = useState(selection?.mode ?? "manual");
   const [picked, setPicked] = useState(() => (selection?.mode === "manual" ? selection.selected : concepts));
@@ -74,7 +75,8 @@ export default function ConceptPicker({ chapter, subjectName, selection, expecte
             {concepts.map((concept) => (
               <label key={concept} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${picked.includes(concept) ? "border-indigo-200 bg-indigo-50/60 text-slate-900" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
                 <input type="checkbox" className="h-4 w-4 accent-indigo-600" checked={picked.includes(concept)} onChange={() => toggle(concept)} />
-                {concept}
+                <span className="flex-1">{concept}</span>
+                {counts?.[concept] && <span className="text-[11px] tabular-nums text-slate-400">{counts[concept].total}</span>}
               </label>
             ))}
           </div>

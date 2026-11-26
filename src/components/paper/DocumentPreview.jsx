@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
-  blockHtml, buildBlocks, documentCss, makeContext, measureBlocks, pageCapacity, pageChrome, paginate,
+  blockHtml, buildBlocks, documentCss, makeContext, measureBlocks, pageCapacity, pageChrome, paginate, preloadImages,
 } from "../../services/documentRenderer";
 
 // Extra styles for edit mode (selection, drop indicator, page-break marker). Outlines and
@@ -35,11 +35,24 @@ export default function DocumentPreview({
   const [drag, setDrag] = useState(null); // { id, sectionId }
   const [drop, setDrop] = useState(null); // { id, position }
 
+  // Re-measure when fonts (incl. math fonts) or question images finish loading
   useEffect(() => {
     let alive = true;
-    document.fonts?.ready.then(() => alive && setFontsReady((n) => n + 1));
-    return () => { alive = false; };
+    const bump = () => alive && setFontsReady((n) => n + 1);
+    document.fonts?.ready.then(bump);
+    document.fonts?.addEventListener?.("loadingdone", bump);
+    return () => {
+      alive = false;
+      document.fonts?.removeEventListener?.("loadingdone", bump);
+    };
   }, []);
+  const images = useMemo(() => [...new Set(htmls.flatMap((h) => [...h.matchAll(/class="qp-qimg" src="([^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&"))))].join("\n"), [htmls]);
+  useEffect(() => {
+    if (!images) return undefined;
+    let alive = true;
+    preloadImages(images.split("\n")).then(() => alive && setFontsReady((n) => n + 1));
+    return () => { alive = false; };
+  }, [images]);
 
   // Measure every block at the page's content width, then split into pages.
   useLayoutEffect(() => {

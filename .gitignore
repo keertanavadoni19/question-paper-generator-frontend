@@ -20,3 +20,9 @@ npm-debug.log*
 .idea
 .DS_Store
 *.local
+
+# Backend secrets
+backend/.env
+backend/node_modules
+# Database dumps (large, contain user data)
+Supabase_All_Databases/
