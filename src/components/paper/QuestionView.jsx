@@ -2,6 +2,7 @@ import { Pencil, RefreshCw, Trash2, TriangleAlert, Sparkles, Database } from "lu
 import Badge, { DIFFICULTY_COLOR } from "../ui/Badge";
 import Button from "../ui/Button";
 import { optionLetter } from "../../utils/helpers";
+import RichText from "../ui/RichText";
 
 // One question as it appears on the paper. In edit mode it shows edit / regenerate / delete actions.
 export default function QuestionView({ question: q, showAnswers, showSolutions, editMode, onEdit, onRegenerate, onDelete, busy }) {
@@ -13,7 +14,7 @@ export default function QuestionView({ question: q, showAnswers, showSolutions, 
       <div className="flex gap-3">
         <span className="w-8 shrink-0 pt-0.5 text-right font-bold text-slate-900">{q.number ?? "•"}.</span>
         <div className="min-w-0 flex-1">
-          <p className="paper-sheet text-[15px] leading-relaxed text-slate-900">{q.text}</p>
+          <RichText as="div" text={q.text} className="paper-sheet text-[15px] leading-relaxed text-slate-900" />
 
           {q.type === "mcq" ? (
             <ol className="paper-sheet mt-2 grid gap-x-6 gap-y-1 text-[15px] sm:grid-cols-2">
@@ -21,7 +22,7 @@ export default function QuestionView({ question: q, showAnswers, showSolutions, 
                 const isCorrect = showAnswers && i === Number(correct);
                 return (
                   <li key={i} className={`rounded-md px-2 py-0.5 ${isCorrect ? "bg-green-50 font-semibold text-green-800 ring-1 ring-green-300" : "text-slate-700"}`}>
-                    ({optionLetter(i)}) {opt}
+                    ({optionLetter(i)}) <RichText text={opt} />
                   </li>
                 );
               })}
@@ -42,7 +43,7 @@ export default function QuestionView({ question: q, showAnswers, showSolutions, 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             <Badge color="slate">{q.chapter}</Badge>
             {q.concept && <Badge color="slate" className="font-normal">{q.concept}</Badge>}
-            <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>
+            {q.difficulty && <Badge color={DIFFICULTY_COLOR[q.difficulty]}>{q.difficulty}</Badge>}
             {q.type === "numerical" && <Badge color="cyan">Numerical</Badge>}
             {q.bankId && <Badge color="indigo"><Database className="h-3 w-3" />Bank</Badge>}
             {q.source === "ai" && <Badge color="pink"><Sparkles className="h-3 w-3" />AI</Badge>}

@@ -21,3 +21,12 @@
 .paper-sheet {
   font-family: "Times New Roman", Georgia, serif;
 }
+
+/* Question text with math and images (RichText) */
+.qp-rich .qp-qimg {
+  display: block;
+  max-width: 100%;
+  max-height: 14rem;
+  margin: 0.375rem 0;
+  border-radius: 0.375rem;
+}

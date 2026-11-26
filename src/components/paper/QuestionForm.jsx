@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { CircleAlert } from "lucide-react";
 import Input from "../ui/Input";
 import Select from "../ui/Select";
 import Textarea from "../ui/Textarea";
 import Button from "../ui/Button";
 import { EXAMS, SUBJECTS } from "../../data/exams";
-import { chaptersFor } from "../../data/syllabus";
+import { useSubjectChapters } from "../../services/syllabusService";
 import { optionLetter } from "../../utils/helpers";
 
 const BANK_SUBJECTS = ["physics", "chemistry", "mathematics", "botany", "zoology"];
@@ -48,7 +48,7 @@ export default function QuestionForm({ initial, onSubmit, onCancel, submitLabel 
   const [saving, setSaving] = useState(false);
 
   const subjects = subjectOptions ?? BANK_SUBJECTS;
-  const chapterList = useMemo(() => chaptersFor(q.subjectId), [q.subjectId]);
+  const chapterList = useSubjectChapters(q.subjectId);
   const chapters = chapterList.map((c) => c.name);
   const concepts = chapterList.find((c) => c.name === q.chapter)?.concepts ?? [];
 

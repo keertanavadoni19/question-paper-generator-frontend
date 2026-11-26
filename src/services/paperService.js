@@ -3,9 +3,13 @@ import { storage } from "./storage";
 import { getQuestionsSync } from "./questionService";
 import { getSyllabusSync } from "./syllabusService";
 import { generateQuestion, placeholderQuestion } from "./mockAi";
-import { EXAMS, SET_LABELS, SUBJECT_SOURCES, getExam, getSubject } from "../data/exams";
+import { EXAMS, SUBJECT_SOURCES, getExam, getSubject } from "../data/exams";
 import { shuffle, sleep, uid } from "../utils/helpers";
 import { matchesConcepts } from "../utils/concepts";
+import { buildSets, paperTotals } from "../shared/paperCore.js";
+import { allocate } from "../shared/allocation.js";
+
+export { buildSets, paperTotals };
 
 export const GENERATION_STEPS = [
   "Reading exam pattern & syllabus",
@@ -14,25 +18,6 @@ export const GENERATION_STEPS = [
   "Balancing difficulty levels",
   "Creating paper sets & answer keys",
 ];
-
-// ── Sets ───────────────────────────────────────────────────────
-// Set A keeps the original order. Other sets shuffle questions within each
-// section and/or shuffle MCQ options, so every set has its own answer key.
-export function buildSets(paper, count, { shuffleQuestions = true, shuffleOptions = true } = {}) {
-  return SET_LABELS.slice(0, Math.min(Math.max(count, 1), 8)).map((label, index) => {
-    const order = paper.sections.flatMap((section) => {
-      const ids = paper.questions.filter((q) => q.sectionId === section.subjectId).map((q) => q.id);
-      return index > 0 && shuffleQuestions ? shuffle(ids) : ids;
-    });
-    const optionOrder = Object.fromEntries(
-      paper.questions.map((q) => {
-        const identity = q.options.map((_, i) => i);
-        return [q.id, index > 0 && shuffleOptions && q.type === "mcq" ? shuffle(identity) : identity];
-      })
-    );
-    return { label, order, optionOrder };
-  });
-}
 
 // Question numbering from paper.layout.numbering:
 //   start – first number (default 1); scope – "continuous" across sections or restart per "section".
@@ -155,10 +140,6 @@ export function updateQuestion(paper, id, data) {
   };
 }
 
-export function paperTotals(paper) {
-  const questions = paper.questions.length;
-  return { questions, marks: paper.questions.reduce((sum, q) => sum + (q.marks ?? 0), 0) };
-}
 
 // ── Mock generator ─────────────────────────────────────────────
 function difficultyQuota(total, mix) {
@@ -208,16 +189,44 @@ function pickForSection({ exam, section, type, count, mix, used }) {
   return result;
 }
 
+// Wizard configs give questions per chapter (chapterCounts) and per type (typeCounts).
+// In mock mode the offline AI and drafts can fill any gap, so availability is unlimited;
+// assertion–reason questions are written as ordinary MCQs.
+function sectionQuestions({ exam, section, mix, used }) {
+  if (section.questionIds?.length) {
+    // Manual Fetch: the questions the faculty picked, in their order
+    const byId = Object.fromEntries(getQuestionsSync().map((q) => [q.id, q]));
+    return section.questionIds.map((id) => byId[id]).filter(Boolean).map((q) => {
+      used.add(q.id);
+      return { ...q, bankId: q.id, id: uid("PQ") };
+    });
+  }
+  const counts = section.chapterCounts;
+  if (!counts || !Object.keys(counts).length) {
+    return [
+      ...pickForSection({ exam, section, type: "mcq", count: section.mcq || 0, mix, used }),
+      ...pickForSection({ exam, section, type: "numerical", count: section.numerical || 0, mix, used }),
+    ];
+  }
+  const chapters = section.chapters.filter((c) => counts[c] > 0);
+  const types = section.typeCounts ?? { mcq: section.mcq || 0, assertion_reason: 0, numerical: section.numerical || 0 };
+  const { alloc } = allocate(chapters.map((c) => counts[c]), types, chapters.map(() => ({ mcq: Infinity, assertion_reason: Infinity, numerical: Infinity })));
+  return chapters.flatMap((chapter, i) => {
+    const one = { ...section, chapters: [chapter] };
+    return [
+      ...pickForSection({ exam, section: one, type: "mcq", count: alloc[i].mcq + alloc[i].assertion_reason, mix, used }),
+      ...pickForSection({ exam, section: one, type: "numerical", count: alloc[i].numerical, mix, used }),
+    ];
+  });
+}
+
 export function buildPaper(config, user) {
   const exam = getExam(config.examId);
   const used = new Set();
   const sections = config.sections.map((s) => ({ subjectId: s.subjectId, name: getSubject(s.subjectId).name }));
 
   const questions = config.sections.flatMap((section) =>
-    [
-      ...pickForSection({ exam, section, type: "mcq", count: section.mcq || 0, mix: config.difficulty, used }),
-      ...pickForSection({ exam, section, type: "numerical", count: section.numerical || 0, mix: config.difficulty, used }),
-    ].map((q) => ({
+    sectionQuestions({ exam, section, mix: config.difficulty, used }).map((q) => ({
       ...q,
       sectionId: section.subjectId,
       marks: exam.marking.correct,
@@ -381,7 +390,7 @@ export async function duplicatePaper(id, user) {
 export async function regenerateQuestion(paper, questionId) {
   const target = paper.questions.find((q) => q.id === questionId);
   if (!USE_MOCK) {
-    return request(`/papers/${paper.id}/questions/${questionId}/regenerate`, { method: "POST" });
+    return request(`/papers/${paper.id}/questions/${questionId}/regenerate`, { method: "POST", body: { paper: { ...paper, layout: undefined }, question: target } });
   }
   await sleep(700);
   const exam = getExam(paper.examId);

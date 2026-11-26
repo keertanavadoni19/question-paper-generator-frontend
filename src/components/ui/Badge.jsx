@@ -10,7 +10,7 @@ const COLORS = {
 };
 
 export const DIFFICULTY_COLOR = { easy: "green", medium: "amber", hard: "red" };
-export const EXAM_COLOR = { "jee-main": "indigo", "neet-ug": "emerald", kcet: "amber" };
+export const EXAM_COLOR = { "jee-main": "indigo", "neet-ug": "emerald", kcet: "amber", assignment: "slate" };
 
 export default function Badge({ color = "slate", children, className = "" }) {
   // single lowercase words like "easy" / "draft" / "admin" are shown capitalised

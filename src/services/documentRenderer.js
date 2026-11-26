@@ -6,9 +6,11 @@
 //   pageChrome()   → running header, footer, page numbers, watermark and page border
 // The Word (.docx) export (docxExport.js) reads the same blocks and layout.
 import { getSetView, paperTotals, numberingOf } from "./paperService";
-import { getLayout, pageMetrics, fontCss, numberLabel, sectionHeading, MM_TO_PX, HEADER_FIELDS } from "./paperLayout";
+import { getLayout, pageMetrics, fontCss, numberLabel, sectionHeading, optionLabel, setDisplay, MM_TO_PX, HEADER_FIELDS } from "./paperLayout";
 import { getExam } from "../data/exams";
 import { escapeHtml as e, optionLetter } from "../utils/helpers";
+import { richHtml, imageUrls, segments } from "../utils/richText";
+import katexCss from "katex/dist/katex.min.css?inline";
 
 // ── Instructions ───────────────────────────────────────────────
 export function defaultInstructions(paper) {
@@ -34,7 +36,7 @@ export function defaultInstructions(paper) {
 export const paperInstructions = (paper) =>
   paper.instructions?.trim() ? paper.instructions.split("\n").map((l) => l.trim()).filter(Boolean) : defaultInstructions(paper);
 
-const fill = (text, ctx) => String(text ?? "").replaceAll("{set}", ctx.setLabel).replaceAll("{title}", ctx.paper.title);
+const fill = (text, ctx) => String(text ?? "").replaceAll("{set}", setDisplay(ctx.layout, ctx.setLabel)).replaceAll("{title}", ctx.paper.title);
 
 // ── CSS ────────────────────────────────────────────────────────
 // Word's "single" line spacing is about 1.15 × the font size for common fonts.
@@ -81,6 +83,16 @@ export function documentCss(layout) {
   .qp-doc .qp-opts.single td.qp-option { width: 100%; }
   .qp-doc .qp-correct { background: #dcfce7; outline: 1px solid #86efac; }
   .qp-doc .qp-sol { font-family: ${fontCss(st.question.fontFamily)}; font-size: ${Math.max(8, st.question.fontSize - 1)}pt; background: #f1f5f9; padding: 3pt 6pt; margin: 0 0 8pt ${opt.indent}mm; color: #334155; }
+  .qp-doc .qp-qimg { display: block; max-width: 100%; max-height: ${Number(layout.diagramMaxHeight) || 260}px; height: auto; margin: 3pt 0; }
+  .qp-doc .qp-qrow { display: flex; gap: 5mm; align-items: flex-start; }
+  .qp-doc .qp-qmain { flex: 1 1 auto; min-width: 0; }
+  .qp-doc .qp-qside { flex: 0 1 auto; max-width: 42%; padding-top: 2pt; }
+  .qp-doc .qp-qside .qp-qimg { margin: 0 0 3pt auto; }
+  .qp-doc .qp-ans { font-family: ${fontCss(st.option.fontFamily)}; font-size: ${st.option.fontSize}pt; margin: 0 0 6pt ${opt.indent}mm; font-weight: 700; }
+  .qp-doc .qp-wm-img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+  .qp-doc .qp-option .qp-qimg { max-height: 35mm; }
+  .qp-doc .katex { font-size: 1.1em; }
+  .qp-doc .katex-display { margin: 3pt 0; }
   .qp-doc .qp-hr { border: 0; border-top: 1pt solid #111; margin: 6pt 0; }
   .qp-doc .qp-pb { height: 0; }
   .qp-doc .qp-table { border-collapse: collapse; width: 100%; margin: 4pt 0 8pt; }
@@ -105,8 +117,8 @@ export function optionColumns(options) {
   return options.some((o) => String(o).length > LONG_OPTION) ? 1 : 2;
 }
 
-function answerKeyBlocks(view, setLabel, scope) {
-  const blocks = [{ key: `key-title-${setLabel}`, kind: "heading", text: `Answer Key – Set ${setLabel}`, breakBefore: true, keepWithNext: true }];
+function answerKeyBlocks(view, setLabel, scope, setName = setLabel) {
+  const blocks = [{ key: `key-title-${setLabel}`, kind: "heading", text: `Answer Key – Set ${setName}`, breakBefore: true, keepWithNext: true }];
   const groups = scope === "section" ? view.map((s) => ({ label: s.name, questions: s.questions })) : [{ label: "", questions: view.flatMap((s) => s.questions) }];
   groups.forEach((g, gi) => {
     for (let i = 0; i < g.questions.length; i += 10) {
@@ -116,27 +128,43 @@ function answerKeyBlocks(view, setLabel, scope) {
   return blocks;
 }
 
-function solutionBlocks(view, setLabel, breakBefore) {
+function solutionBlocks(view, setLabel, breakBefore, setName = setLabel, title = "Solutions") {
   const all = view.flatMap((s) => s.questions);
   return [
-    { key: `sol-title-${setLabel}`, kind: "heading", text: `Solutions – Set ${setLabel}`, breakBefore, keepWithNext: true },
+    { key: `sol-title-${setLabel}`, kind: "heading", text: `${title} – Set ${setName}`, breakBefore, keepWithNext: true },
     ...all.map((q) => ({ key: `sol-${setLabel}-${q.id}`, kind: "solution", q })),
   ];
 }
 
 // Ordered document blocks for one set of a paper.
 export function buildBlocks(paper, setLabel, opts = {}) {
-  const { showAnswers = false, showSolutions = false, includeAnswerKey = false, includeSolutions = false, answerKeyOnly = false } = opts;
   const layout = getLayout(paper);
+  // Output mode (Preview & Save). Export options can add a key / solutions on top.
+  const output = opts.output ?? layout.output ?? "questions";
+  const {
+    showAnswers = false,
+    showSolutions = false,
+    includeAnswerKey = output === "answers_after",
+    includeSolutions = output === "answers_after",
+    answerKeyOnly = output === "only_answers",
+  } = opts;
+  const answerLine = output === "answers" || output === "answers_solutions";
+  const solutionLine = output === "answers_solutions";
+  const hideOptions = output === "no_options";
   const view = getSetView(paper, setLabel);
   const { scope } = numberingOf(paper);
+  const setName = setDisplay(layout, setLabel);
   const extras = layout.blocks ?? [];
   const anchored = (anchor) => extras.filter((b) => b.after === anchor).map((b) => ({ key: `x-${b.id}`, kind: "extra", block: b, breakAfter: b.type === "pageBreak" }));
 
   const blocks = [{ key: "head", kind: "paperHeader" }];
   if (answerKeyOnly) {
-    blocks.push(...answerKeyBlocks(view, setLabel, scope).map((b, i) => (i === 0 ? { ...b, breakBefore: false } : b)));
-    if (includeSolutions) blocks.push(...solutionBlocks(view, setLabel, true));
+    blocks.push(...answerKeyBlocks(view, setLabel, scope, setName).map((b, i) => (i === 0 ? { ...b, breakBefore: false } : b)));
+    if (includeSolutions) blocks.push(...solutionBlocks(view, setLabel, true, setName));
+    return blocks;
+  }
+  if (output === "only_answers_solutions") {
+    blocks.push(...solutionBlocks(view, setLabel, false, setName, "Answers & Solutions"));
     return blocks;
   }
 
@@ -154,20 +182,32 @@ export function buildBlocks(paper, setLabel, opts = {}) {
     });
     blocks.push(...anchored(`section:${section.subjectId}`));
     section.questions.forEach((q) => {
-      blocks.push({ key: `q-${q.id}`, kind: "question", q, qid: q.id, sectionId: section.subjectId, showAnswers, showSolutions });
+      blocks.push({ key: `q-${q.id}`, kind: "question", q, qid: q.id, sectionId: section.subjectId, showAnswers, showSolutions: showSolutions || solutionLine, answerLine, hideOptions });
       blocks.push(...anchored(`q:${q.id}`));
     });
   });
   blocks.push(...anchored("end"));
   if (layout.endNote?.trim()) blocks.push({ key: "end-note", kind: "endNote" });
-  if (includeAnswerKey) blocks.push(...answerKeyBlocks(view, setLabel, scope));
-  if (includeSolutions) blocks.push(...solutionBlocks(view, setLabel, !includeAnswerKey));
+  if (includeAnswerKey) blocks.push(...answerKeyBlocks(view, setLabel, scope, setName));
+  if (includeSolutions) blocks.push(...solutionBlocks(view, setLabel, !includeAnswerKey, setName));
   return blocks;
 }
 
 // ── HTML for one block ─────────────────────────────────────────
 const t = (text) => `<span class="t">${e(text)}</span>`;
-const answerText = (q) => (q.type === "mcq" ? optionLetter(q.correctIndex) : e(q.answer));
+// Question content: LaTeX → KaTeX, {{IMG::url}} → image
+const r = (text) => `<span class="t">${richHtml(text)}</span>`;
+const answerText = (q, layout) => (q.type === "mcq" ? (layout ? optionLabel(layout, q.correctIndex).replace(/[()]/g, "") : optionLetter(q.correctIndex)) : e(q.answer));
+
+// Columns for the options: chosen layout, or "auto fit" by option length.
+export function optionColumnsFor(layout, options) {
+  if (layout.optionLayout === "line") return Math.max(1, options.length);
+  if (layout.optionLayout === "two") return 2;
+  if (layout.optionLayout === "one") return 1;
+  const plain = options.map((o) => String(o).replace(/\$[^$]*\$/g, "xx"));
+  if (plain.every((o) => o.length <= 14) && !options.some((o) => /\{\{IMG::/.test(o))) return Math.max(1, options.length);
+  return optionColumns(options);
+}
 
 export function makeContext(paper, setLabel) {
   const layout = getLayout(paper);
@@ -180,7 +220,7 @@ function headerHtml(ctx) {
   const line = (cls, text) => (text?.trim() ? `<p class="qp-${cls}">${t(text.trim())}</p>` : "");
   const joined = (parts) => parts.filter((p) => p?.trim()).join("   |   ");
   const subject = joined([h.subjectName, h.subjectCode && `Subject Code: ${h.subjectCode}`]);
-  const details = joined([h.academicYear && `Academic Year: ${h.academicYear}`, h.semester && `Semester: ${h.semester}`, h.examDate && `Date: ${h.examDate}`, h.faculty && `Faculty: ${h.faculty}`]);
+  const details = joined([h.className && `Class: ${h.className}`, h.academicYear && `Academic Year: ${h.academicYear}`, h.semester && `Semester: ${h.semester}`, h.examDate && `Date: ${h.examDate}`, h.faculty && `Faculty: ${h.faculty}`]);
   const text = [
     line("institution", h.university),
     line("institution", h.college),
@@ -201,7 +241,7 @@ function headerHtml(ctx) {
   const meta = `<table class="qp-metarow qp-meta"><tr>
       <td>Time: <b>${paper.durationMinutes} min</b></td>
       <td style="text-align:center">Max. Marks: <b>${totals.marks}</b></td>
-      <td style="text-align:right">${h.showSetBadge ? `<span class="qp-set">SET ${e(ctx.setLabel)}</span>` : ""}</td>
+      <td style="text-align:right">${h.showSetBadge ? `<span class="qp-set">SET ${e(setDisplay(ctx.layout, ctx.setLabel))}</span>` : ""}</td>
     </tr></table>`;
   return `${top}${meta}<div class="qp-rule"></div>`;
 }
@@ -261,21 +301,33 @@ export function blockHtml(block, ctx) {
     case "question": {
       const q = block.q;
       const marks = layout.showMarks ? `<span class="qp-meta qp-marks">[${q.marks}${q.negative ? `, ${q.negative}` : ""}]</span>` : "";
-      const head = `<p class="qp-question">${marks}<span class="qp-num">${e(numberLabel(layout, q.number))}</span> ${t(q.text)}</p>`;
-      let body;
-      if (q.type === "mcq") {
-        const cols = optionColumns(q.displayOptions);
+      // Diagrams beside the question (default) or below it
+      const segs = segments(q.text);
+      const images = layout.imageBelow ? [] : segs.filter((s) => s.type === "image").map((s) => s.value);
+      const text = images.length ? q.text.replace(/\{\{IMG::https?:\/\/[^}\s]+\}\}/g, "").replace(/\n{2,}/g, "\n").trim() : q.text;
+      const num = layout.showNumbers === false ? "" : `<span class="qp-num">${e(numberLabel(layout, q.number))}</span> `;
+      const head = `<p class="qp-question">${marks}${num}${r(text)}</p>`;
+      let body = "";
+      if (block.hideOptions) {
+        body = "";
+      } else if (q.type === "mcq") {
+        const cols = optionColumnsFor(layout, q.displayOptions);
         const cells = q.displayOptions.map(
-          (opt, i) => `<td class="qp-option${block.showAnswers && i === q.correctIndex ? " qp-correct" : ""}">(${optionLetter(i)}) ${t(opt)}</td>`
+          (opt, i) => `<td class="qp-option${block.showAnswers && i === q.correctIndex ? " qp-correct" : ""}" style="width:${(100 / cols).toFixed(2)}%">${optionLabel(layout, i)} ${r(opt)}</td>`
         );
         const rows = [];
         for (let i = 0; i < cells.length; i += cols) rows.push(`<tr>${cells.slice(i, i + cols).join("")}</tr>`);
         body = `<table class="qp-opts${cols === 1 ? " single" : ""}">${rows.join("")}</table>`;
-      } else {
+      } else if (!block.answerLine) {
         body = `<p class="qp-option">Answer: ${block.showAnswers ? `<span class="qp-correct">&nbsp;${e(q.answer)}&nbsp;</span>` : "____________"}</p>`;
       }
-      const sol = block.showSolutions && q.solution ? `<p class="qp-sol"><b>Solution:</b> ${e(q.solution)}</p>` : "";
-      return head + body + sol;
+      const ans = block.answerLine ? `<p class="qp-ans">Ans: ${q.type === "mcq" ? optionLabel(layout, q.correctIndex) : e(q.answer)}</p>` : "";
+      const sol = block.showSolutions && q.solution ? `<p class="qp-sol"><b>Solution:</b> ${richHtml(q.solution)}</p>` : "";
+      if (images.length) {
+        const side = images.map((src) => `<img class="qp-qimg" src="${e(src)}" alt="" referrerpolicy="no-referrer">`).join("");
+        return `<div class="qp-qrow"><div class="qp-qmain">${head}${body}${ans}</div><div class="qp-qside">${side}</div></div>${sol}`;
+      }
+      return head + body + ans + sol;
     }
     case "extra":
       return extraHtml(block.block, ctx);
@@ -286,12 +338,12 @@ export function blockHtml(block, ctx) {
     case "keyRow": {
       const label = block.label ? `<p class="qp-meta" style="font-weight:700;margin:4pt 0 2pt">${t(block.label)}</p>` : "";
       return `${label}<table class="qp-key qp-meta"><tr>${block.questions.map((q) => `<th>${e(q.number)}</th>`).join("")}</tr><tr>${block.questions
-        .map((q) => `<td>${answerText(q)}</td>`)
+        .map((q) => `<td>${answerText(q, layout)}</td>`)
         .join("")}</tr></table>`;
     }
     case "solution": {
       const q = block.q;
-      return `<p class="qp-question" style="margin-bottom:4pt"><b>${e(numberLabel(layout, q.number))}</b> (${answerText(q)}) ${t(q.solution || "—")}</p>`;
+      return `<p class="qp-question" style="margin-bottom:4pt"><b>${e(numberLabel(layout, q.number))}</b> (${answerText(q, layout)}) ${r(q.solution || "—")}</p>`;
     }
     default:
       return "";
@@ -311,6 +363,11 @@ export function pageChrome(ctx, n, total) {
   const num = pos === "none" ? "" : e(pageNumberText(layout, n, total));
   const parts = [];
 
+  const logo = layout.header.logo;
+  if (layout.watermark.emblem && logo?.src?.startsWith("data:image/")) {
+    const w = (Math.min(metrics.width, metrics.height) * 0.6 * (Number(layout.watermark.emblemSize) || 100)) / 100;
+    parts.push(`<img class="qp-wm-img" src="${e(logo.src)}" alt="" style="width:${w.toFixed(1)}mm;height:${(w / (logo.ratio || 1)).toFixed(1)}mm;opacity:${Number(layout.watermark.opacity) || 0.08}">`);
+  }
   if (layout.watermark.text?.trim()) {
     const size = Math.round(Math.min(metrics.width, metrics.height) / 2.2 / Math.max(4, layout.watermark.text.length) * 2.83 * 1.6);
     parts.push(`<div class="qp-wm" style="font-size:${Math.max(28, size)}pt;color:${e(layout.watermark.color)};opacity:${Number(layout.watermark.opacity) || 0.18}">${e(layout.watermark.text.trim())}</div>`);
@@ -401,10 +458,28 @@ export function renderPagesHtml(doc, paper, { sets = ["A"], ...opts } = {}) {
     .join("");
 }
 
+// Every image used by the paper's questions (so they can be loaded before paginating).
+export function paperImageUrls(paper) {
+  return [...new Set(paper.questions.flatMap((q) => [q.text, ...(q.options ?? []), q.solution].flatMap(imageUrls)))];
+}
+
+// Resolves once the images are loaded (or failed / timed out), so their heights are known.
+export function preloadImages(urls, timeoutMs = 10000) {
+  if (!urls.length) return Promise.resolve();
+  const load = (url) => new Promise((done) => {
+    const img = new Image();
+    img.referrerPolicy = "no-referrer";
+    img.onload = img.onerror = () => done();
+    img.src = url;
+  });
+  return Promise.race([Promise.all(urls.map(load)), new Promise((done) => setTimeout(done, timeoutMs))]);
+}
+
 export function printCss(paper) {
   const layout = getLayout(paper);
   const metrics = pageMetrics(layout);
-  return `${documentCss(layout)}
+  return `${katexCss}
+${documentCss(layout)}
   @page { size: ${metrics.width}mm ${metrics.height}mm; margin: 0; }
   html, body { margin: 0; padding: 0; background: #fff; }
   .qp-doc .qp-page { break-after: page; page-break-after: always; height: ${(metrics.height - 0.4).toFixed(2)}mm !important; }

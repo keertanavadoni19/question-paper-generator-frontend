@@ -46,7 +46,7 @@ Optional: `cp .env.example .env` to change the API URL or turn mock mode off.
 | **Exams** | JEE Main / NEET UG / KCET cards and a pattern comparison table (2026 patterns) |
 | **Syllabus** *(Admin)* | Turn chapters on/off, rename, add or delete them, set the class (11/12) and weightage per exam and subject, reset to the default list |
 | **Question bank** | Search and filter; add, edit or delete questions (MCQ or numerical, with a solution); preview AI-generated questions before saving them |
-| **Generate paper** | Exam → title, institute, duration, instructions → subjects and chapters → full pattern or custom counts → difficulty mix → **1–8 sets** → AI generation with progress |
+| **Generate paper** | 7-step wizard: subjects & details → chapters (All / None / Class 11 / Class 12, search) → concepts (automatic or manual) → questions per chapter → questions per type + difficulty → **1–8 sets** → summary, preview & generate. Selections are kept when moving between steps |
 | **Concept selection** | Every Physics, Chemistry and Maths chapter has a **Select Concepts** button. Pick concepts **manually** (checkboxes, select all / clear) or let **Automatic** mode spread picks across the chapter based on its expected question count. Choices are kept per chapter and survive All / None / Class 11 / Class 12 |
 | **Preview & edit** | Live document preview with real pages, page numbers, zoom and full screen; set tabs A–H; show/hide answers and solutions; select, edit on the page, duplicate, move up/down, drag to reorder, regenerate, delete and add questions; undo/redo and find & replace (all auto-saved); answer key panel |
 | **Document formatting** | Toolbar tabs: **Numbering** (start at any number, continuous or per section, `1.` / `Q1.` / `Question 1.`), **Font** and **Paragraph** per document part (title, college, subject, exam details, instructions, section headings, questions, options, marks), **Page layout** (A4/A3/Letter/Legal, portrait/landscape, Word margin presets or custom, page border), **Header & footer** (college, university, department, exam, year, semester, subject code/name, date, faculty, logo, running header, footer, page numbers), **Insert** (page break, line, table, text/lists, image, instructions, watermark) |
@@ -89,32 +89,65 @@ qp-generator-frontend/
 
 ---
 
-## 4. Connecting your backend
+## 4. Backend: Supabase question bank (`backend/`)
 
-1. Create `.env`:
-   ```
-   VITE_API_URL=http://localhost:5000/api
-   VITE_USE_MOCK=false
-   ```
-2. Restart `npm run dev`.
-3. Every service in `src/services/` calls these endpoints when mock mode is off.
-   The token from login is sent as `Authorization: Bearer <token>`.
+The `backend/` folder is a small Node/Express API that connects the app to the **8 Supabase projects**
+(the `Supabase_All_Databases/*.dump` backups). Secret keys stay on the server.
+
+| Project | Holds |
+|---|---|
+| DB1 / DB2 | Chemistry class 11 / 12 questions |
+| DB3 / DB4 | Mathematics class 11 / 12 questions |
+| DB5 / DB6 | Biology class 12 / 11 questions (split into Botany / Zoology for NEET) |
+| DB7 | Physics class 11 questions **+ app data**: `users`, `papers`, `settings`, `question_usage` |
+| DB8 | Physics class 12 questions |
+
+**Set up**
+
+```bash
+npm run server:install                 # installs backend/node_modules
+cp backend/.env.example backend/.env   # then fill in the 8 project URLs + service_role keys and JWT_SECRET
+npm run server:check                   # verifies every project (question counts, users table)
+npm run server                         # API on http://localhost:5000/api
+```
+
+Then in the project root create `.env` with `VITE_USE_MOCK=false` (and `VITE_API_URL` if the API is not on
+port 5000) and restart `npm run dev`. Log in with an account from the `users` table (bcrypt `password_hash`).
+
+**What it does**
+
+- On start it indexes every question (subject, class, chapter, topic, exam tags, type) from all 8 projects and
+  refreshes every `INDEX_REFRESH_MINUTES`. Chapters/concepts that differ only in case or apostrophes are merged;
+  "(Legacy / Removed Syllabus)" and "General" chapters are hidden (`INCLUDE_LEGACY_CHAPTERS`).
+- Exam filters: JEE uses questions tagged JEE / JEE Main / NEET/JEE, NEET uses NEET-tagged, KCET may use any.
+- **Generation** follows the wizard exactly: questions per chapter, per type (MCQ, assertion–reason, numerical)
+  and the chosen concepts; concepts are rotated so they are covered evenly; recently used questions
+  (`question_usage`) are avoided; duplicates and unusable rows (e.g. a non-numeric numerical answer) are skipped.
+- Papers are saved in `papers` with `metadata.source = "qp-generator"`. Rows from other apps are never listed,
+  changed or deleted. Syllabus changes (Syllabus page) are stored in `settings` (`qpg_syllabus_overrides`).
+- Question bank: teachers may add questions (saved as *pending review*); only admins edit or delete.
+- Sign-up is off unless `ALLOW_SIGNUP=true`; admins manage accounts on the Users page.
+- The bank has no difficulty field, so the difficulty mix is saved with the paper but not used for picking.
+- Question text may contain LaTeX (`$…$`) and images (`{{IMG::url}}`): the preview, PDF and Print render them
+  (KaTeX); Word exports embed the images and write formulas as readable text (e.g. `(q²)/(2ε₀A²)`).
 
 | Method | Endpoint | Used by |
 |--------|----------|---------|
-| POST | `/auth/login` `{ email, password, role }` → `{ user, token }` | Login |
-| POST | `/auth/signup` `{ fullName, email, password, role }` | Signup |
+| GET | `/health` | Status of each project and the index (no login) |
+| POST | `/auth/login` `{ email, password, role }` → `{ user, token }`, `/auth/signup` | Login, Signup |
 | GET/PATCH/DELETE | `/users`, `/users/:id` | Users, Settings |
-| GET | `/syllabus/:examId` → `{ [subjectId]: Chapter[] }` | Syllabus, Generate |
-| PUT | `/syllabus/:examId/:subjectId` `{ chapters }` | Syllabus |
-| POST | `/syllabus/:examId/reset` | Syllabus |
-| GET/POST | `/questions?subjectId=&examId=…`, `/questions` | Question bank |
-| PUT/DELETE | `/questions/:id` | Question bank |
-| POST | `/papers/generate` (config) → Paper | Generate (**your AI goes here**) |
-| GET/POST | `/papers`, `/papers/:id` | Papers, Preview |
-| PUT/DELETE | `/papers/:id` | Preview (auto-save), Papers |
-| POST | `/papers/:id/questions/:qid/regenerate` → Question | Preview |
+| GET | `/syllabus/:examId` → `{ [subjectId]: Chapter[] }` (with `concepts`, `counts`, `conceptCounts`) | Generate wizard, Syllabus |
+| GET | `/chapters/:subjectId` | Question forms and filters |
+| PUT / POST | `/syllabus/:examId/:subjectId`, `/syllabus/:examId/reset` | Syllabus (admin) |
+| GET | `/questions?subjectId=&examId=&chapter=&type=&search=&limit=&offset=` → `{ items, total }`, `/questions/stats` | Question bank, editor |
+| POST / PUT / DELETE | `/questions`, `/questions/:id` | Question bank |
+| POST | `/papers/generate` (wizard config) → Paper | Generate |
+| GET/POST/PUT/DELETE | `/papers`, `/papers/:id` | Papers, Preview |
+| POST | `/papers/:id/questions/:qid/regenerate` | Preview |
 | GET | `/analytics` | Dashboard, Analytics |
+
+**Generation config** (from the wizard): `sections[] = { subjectId, chapters[], chapterCounts: { chapter: n },
+typeCounts: { mcq, assertion_reason, numerical }, concepts: { chapter: { mode, selected[] } }, mcq, numerical }`.
 
 **Paper layout.** Formatting is stored on the paper as `paper.layout` (numbering, fonts, page setup,
 header/footer, watermark, section settings and inserted blocks; see `src/services/paperLayout.js`).

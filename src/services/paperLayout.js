@@ -72,6 +72,43 @@ export const PAGE_NUMBER_FORMATS = [
   { value: "number", label: "1" },
 ];
 
+// What the document contains (Preview & Save → "Output")
+export const OUTPUT_MODES = [
+  { value: "questions", label: "1. Questions" },
+  { value: "answers", label: "2. Questions with Answers" },
+  { value: "answers_solutions", label: "3. Questions with Answers & Solutions" },
+  { value: "answers_after", label: "4. Questions after Answers & Solutions" },
+  { value: "no_options", label: "5. Only Questions with No Options" },
+  { value: "only_answers_solutions", label: "6. Only Answers & Solutions" },
+  { value: "only_answers", label: "7. Only Answers" },
+];
+
+export const OPTION_LABELS = [
+  { value: "num", label: "(1) (2) (3) (4)" },
+  { value: "upper", label: "(A) (B) (C) (D)" },
+  { value: "lower", label: "(a) (b) (c) (d)" },
+];
+export const OPTION_LAYOUTS = [
+  { value: "line", label: "In a line" },
+  { value: "two", label: "2 columns" },
+  { value: "one", label: "1 column" },
+  { value: "auto", label: "Auto fit" },
+];
+export const DIAGRAM_HEIGHTS = [200, 260, 300, 350];
+
+export function optionLabel(layout, index) {
+  if (layout.optionLabels === "num") return `(${index + 1})`;
+  if (layout.optionLabels === "lower") return `(${String.fromCharCode(97 + index)})`;
+  return `(${String.fromCharCode(65 + index)})`;
+}
+
+// Display name of a set: A, B, C… or P, Q, R…
+const PQRS = ["P", "Q", "R", "S", "T", "U", "V", "W"];
+export function setDisplay(layout, label) {
+  if (layout?.setNames !== "pqrs") return label;
+  return PQRS["ABCDEFGH".indexOf(label)] ?? label;
+}
+
 export const HEADER_FIELDS = [
   ["college", "College name"],
   ["university", "University name"],
@@ -79,6 +116,7 @@ export const HEADER_FIELDS = [
   ["examination", "Examination name"],
   ["academicYear", "Academic year"],
   ["semester", "Semester"],
+  ["className", "Class"],
   ["subjectCode", "Subject code"],
   ["subjectName", "Subject name"],
   ["examDate", "Date of examination"],
@@ -135,6 +173,7 @@ export function defaultLayout(paper) {
       examination: exam?.fullName ?? "",
       academicYear: "",
       semester: "",
+      className: "",
       subjectCode: "",
       subjectName: "",
       examDate: "",
@@ -143,7 +182,14 @@ export function defaultLayout(paper) {
     },
     runningHeader: "",
     footer: { text: "", pageNumbers: "bottom-center", format: "page-of" },
-    watermark: { text: "", color: "#94a3b8", opacity: 0.18 },
+    watermark: { text: "", color: "#94a3b8", opacity: 0.18, emblem: false, emblemSize: 100 },
+    output: "questions", // see OUTPUT_MODES
+    showNumbers: true,
+    imageBelow: false, // false = diagrams beside the question text
+    diagramMaxHeight: 260, // px
+    optionLabels: "upper",
+    optionLayout: "auto",
+    setNames: "letters", // letters (A, B, C…) | pqrs (P, Q, R…)
     instructionsList: "numbered", // numbered | bulleted | plain
     sectionBar: true,
     showMarks: false,
