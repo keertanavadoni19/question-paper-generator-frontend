@@ -1,0 +1,8 @@
+# Only the frontend is deployed (mock / dummy database mode).
+backend
+Supabase_All_Databases
+node_modules
+dist
+.env
+.env.local
+*.log

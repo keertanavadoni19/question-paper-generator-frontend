@@ -34,6 +34,21 @@ npm run lint      # ESLint
 
 Optional: `cp .env.example .env` to change the API URL or turn mock mode off.
 
+### Deploy to Vercel (dummy database)
+
+The deployed site runs on the built-in dummy database (mock data in each visitor's browser), so no backend is needed.
+
+1. Push this repo to GitHub, then in Vercel choose **Add New → Project** and import it.
+2. Leave the defaults. `vercel.json` already sets the Vite build, the `dist` output and the SPA routing (page refreshes work on any route).
+3. Click **Deploy**. No environment variables are required, because `.env.production` sets `VITE_USE_MOCK=true`.
+
+Or from the terminal: `npm i -g vercel`, then `vercel` (preview) or `vercel --prod`.
+
+Notes:
+- Data saved on the live site stays in that visitor's browser. Each person starts from the demo data and can reset it in **Settings**.
+- `backend/` and the database dumps are excluded from the upload by `.vercelignore`.
+- To switch to a real backend later, set `VITE_USE_MOCK=false` and `VITE_API_URL=https://your-api/api` under Vercel **Settings → Environment Variables** and redeploy.
+
 ---
 
 ## 2. Features
