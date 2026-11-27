@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, AlignCenter, Shuffle, Upload, Trash2, FileDown, FileText, Printer, PencilRuler, CircleCheck, Minus, Plus } from "lucide-react";
+import { ArrowLeft, AlignCenter, Shuffle, Upload, Trash2, FileDown, FileText, Printer, PencilRuler, CircleCheck, Minus, Plus, FileImage, ListChecks } from "lucide-react";
 import Toggle from "../ui/Toggle";
 import Button from "../ui/Button";
 import DocumentPreview from "../paper/DocumentPreview";
+import QuestionCards from "../paper/QuestionCards";
 import { buildSets, savePaper } from "../../services/paperService";
 import { exportPdf, exportWord, printPaper } from "../../services/exportService";
 import { DIAGRAM_HEIGHTS, FONT_FAMILIES, MM_TO_PX, OPTION_LABELS, OPTION_LAYOUTS, OUTPUT_MODES, getLayout, pageMetrics, setDisplay } from "../../services/paperLayout";
@@ -65,6 +66,7 @@ export default function PreviewSaveStep({ paper: initial, onBack, onStatus, onOp
   const [exportScope, setExportScope] = useState("current");
   const [busy, setBusy] = useState("");
   const [fit, setFit] = useState(0.7);
+  const [view, setView] = useState("paper"); // "paper" | "cards"
   const viewport = useRef(null);
   const timer = useRef(null);
   const latest = useRef(initial);
@@ -247,13 +249,26 @@ export default function PreviewSaveStep({ paper: initial, onBack, onStatus, onOp
 
       <div className="min-w-0">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Set</span>
-          {SET_LABELS.slice(0, setCount).map((l) => (
-            <button key={l} type="button" aria-pressed={setLabel === l} onClick={() => setSetLabel(l)} className={`h-8 min-w-8 rounded-lg px-2 text-xs font-bold ${setLabel === l ? "bg-indigo-950 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>{setDisplay(layout, l)}</button>
-          ))}
+          <div className="flex gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="View">
+            {[["paper", "Paper view", FileImage], ["cards", "Edit questions", ListChecks]].map(([v, label, Icon]) => (
+              <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${view === v ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}><Icon className="h-3.5 w-3.5" />{label}</button>
+            ))}
+          </div>
+          {view === "paper" ? (
+            <>
+              <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Set</span>
+              {SET_LABELS.slice(0, setCount).map((l) => (
+                <button key={l} type="button" aria-pressed={setLabel === l} onClick={() => setSetLabel(l)} className={`h-8 min-w-8 rounded-lg px-2 text-xs font-bold ${setLabel === l ? "bg-indigo-950 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"}`}>{setDisplay(layout, l)}</button>
+              ))}
+            </>
+          ) : (
+            <span className="text-xs text-slate-500">Click a pencil to edit · click a letter to set the correct answer · changes apply to every set</span>
+          )}
         </div>
         <div ref={viewport} className="overflow-auto rounded-2xl border border-slate-200 bg-slate-100 px-3 py-5 xl:max-h-[calc(100vh-11rem)]">
-          <DocumentPreview paper={paper} setLabel={setLabel} zoom={fit} />
+          {view === "paper"
+            ? <DocumentPreview paper={paper} setLabel={setLabel} zoom={fit} />
+            : <QuestionCards paper={paper} onChange={(fn) => commit(fn(latest.current))} />}
         </div>
       </div>
     </div>
